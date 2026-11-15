@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"regexp"
 	"strings"
@@ -40,6 +41,14 @@ const (
 	defaultConnectTimeout = 5 * time.Second
 )
 
+// forbiddenQueryKeys are the query keys of the URL that change the target of the
+// connection. pgx lets them override the parts of the URL, so a consumer of
+// [Config.ConnString] could connect to a different database or server.
+var forbiddenQueryKeys = map[string]struct{}{
+	"dbname": {}, "database": {}, "host": {}, "hostaddr": {},
+	"port": {}, "service": {}, "servicefile": {},
+}
+
 var databaseNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 
 // Config is the configuration of the PostgreSQL client. A service nests it with
@@ -71,6 +80,11 @@ func (c Config) parse() (*url.URL, error) {
 	}
 	if db := strings.TrimPrefix(u.Path, "/"); db != "" && db != c.Database {
 		return nil, ErrDatabaseMismatch
+	}
+	for key := range u.Query() {
+		if _, bad := forbiddenQueryKeys[strings.ToLower(key)]; bad {
+			return nil, fmt.Errorf("%w: the query key %q is not allowed", ErrInvalidURL, key)
+		}
 	}
 	switch c.Database {
 	case "postgres", "template0", "template1":
@@ -109,6 +123,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	warnWeakTLS(connString)
 	poolCfg, err := pgxpool.ParseConfig(connString.Reveal())
 	if err != nil {
 		return nil, ErrInvalidURL
@@ -147,6 +162,21 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("postgres: cannot register metrics: %w", err)
 	}
 	return &Client{Pool: pool, reg: reg}, nil
+}
+
+// warnWeakTLS writes a warn log record if the URL does not force TLS. The sslmode
+// values disable, allow, and prefer, and a URL without sslmode, can send the
+// password and the data in plain text. The record has the database name only.
+func warnWeakTLS(connString config.Secret) {
+	u, err := url.Parse(connString.Reveal())
+	if err != nil {
+		return
+	}
+	switch u.Query().Get("sslmode") {
+	case "", "disable", "allow", "prefer":
+		slog.Warn("postgres: the URL does not require TLS, so the connection can use plain text",
+			slog.String("database", strings.TrimPrefix(u.Path, "/")))
+	}
 }
 
 // Close stops the pool metrics, then closes the pool.

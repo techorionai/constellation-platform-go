@@ -68,15 +68,19 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.Address == "" {
 		return nil, errors.New("valkey: address is required")
 	}
+	if cfg.Password.Reveal() != "" && !cfg.TLS {
+		slog.Warn("valkey: the client has a password and TLS is off, so the server can read the password in plain text",
+			slog.String("address", cfg.Address))
+	}
 	timeout := cfg.DialTimeout
 	if timeout == 0 {
 		timeout = defaultDialTimeout
 	}
 	opt := valkeygo.ClientOption{
-		InitAddress:  []string{cfg.Address},
-		Username:     cfg.Username,
-		Password:     cfg.Password.Reveal(),
-		Dialer:       net.Dialer{Timeout: timeout},
+		InitAddress: []string{cfg.Address},
+		Username:    cfg.Username,
+		Password:    cfg.Password.Reveal(),
+		Dialer:      net.Dialer{Timeout: timeout},
 		DisableCache: true,
 	}
 	if cfg.TLS {

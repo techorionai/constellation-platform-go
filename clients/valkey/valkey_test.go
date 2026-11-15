@@ -1,8 +1,10 @@
 package valkey_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -116,5 +118,34 @@ func TestLoadDefaultsAndValues(t *testing.T) {
 	v = cfg.Valkey
 	if v.Username != "u" || !v.TLS || v.DialTimeout != 2*time.Second {
 		t.Fatalf("values: %+v", v)
+	}
+}
+
+// U43 (finding R2 of the review of PR 5)
+func TestNewWarnsOnPasswordWithoutTLS(t *testing.T) {
+	old := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(old) })
+	for _, tt := range []struct {
+		password string
+		tls      bool
+		warn     bool
+	}{
+		{"s3cr3t", false, true}, {"s3cr3t", true, false}, {"", false, false},
+	} {
+		var out bytes.Buffer
+		slog.SetDefault(slog.New(slog.NewTextHandler(&out, nil)))
+		ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+		_, _ = valkey.New(ctx, valkey.Config{
+			Address: "127.0.0.1:1", KeyPrefix: "identity",
+			Password: config.Secret(tt.password), TLS: tt.tls,
+		})
+		cancel()
+		got := strings.Contains(out.String(), "TLS is off")
+		if got != tt.warn {
+			t.Errorf("password %q, TLS %v: warn is %v, want %v: %s", tt.password, tt.tls, got, tt.warn, out.String())
+		}
+		if strings.Contains(out.String(), "s3cr3t") {
+			t.Errorf("the log has the password")
+		}
 	}
 }

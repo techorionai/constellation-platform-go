@@ -183,7 +183,7 @@ fmt.Println(name)
 
 Errors:
 
-- `ErrInvalidURL`: the URL does not start with `postgres://` or `postgresql://`.
+- `ErrInvalidURL`: the URL does not start with `postgres://` or `postgresql://`, or the URL has a query key that changes the target of the connection (see the rules below).
 - `ErrInvalidDatabaseName`: the name is empty or does not match the pattern.
 - `ErrSystemDatabase`: the name is `postgres`, `template0`, or `template1`.
 - `ErrDatabaseMismatch`: the database in the URL, or `current_database()`, is not `Database`.
@@ -193,6 +193,8 @@ No error contains the URL or the password.
 Rules and limits:
 
 - Accepted URL forms: `postgres://` and `postgresql://` URLs only. A keyword/value string, for example `host=a dbname=b`, is not accepted.
+- The URL must not have the query keys `dbname`, `database`, `host`, `hostaddr`, `port`, `service`, or `servicefile` (the check ignores letter case). `pgx` lets these keys override the parts of the URL, so `ConnString` and `New` return `ErrInvalidURL` for them. The error names the key and never contains the value.
+- Production TLS rule: use `sslmode=verify-full` in the URL. `New` writes a `warn` log record if the URL has no `sslmode`, or has `disable`, `allow`, or `prefer`. With these values, an attacker on the network can force plain text and read the password. The package does not require TLS, because the URL sets the TLS mode.
 - Each service has its own database user, and the user has access to its own database only. Sample SQL:
 
   ```sql
@@ -280,6 +282,7 @@ Rules and limits:
   - `-@dangerous` refuses `FLUSHALL`, `FLUSHDB`, `KEYS`, and other commands of that category.
   - `-function`, `-script|flush`, and `-script|kill` refuse the commands that change or read the function libraries and the script cache. These are global for the server, and a key pattern does not apply to them.
   - `EVAL`, `EVALSHA`, and `FCALL` stay allowed, because Valkey checks their key arguments against the key pattern.
+- Production TLS rule: set `<PREFIX>VALKEY__TLS` to `true` when the client has a password. `New` writes a `warn` log record if there is a password and `TLS` is `false`, because the server then reads the password in plain text. The package does not require TLS.
 - If the server does not allow custom ACL users (some managed services), use one Valkey instance for each service.
 - The operator loads Valkey functions with an admin user. A service does not load its own functions.
 - `valkey-go` commands are typed builders, so the package cannot add the prefix. Make each key with `Client.Keys`. The ACL rule makes Valkey refuse a key without the prefix.

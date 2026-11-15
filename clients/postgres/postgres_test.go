@@ -1,7 +1,10 @@
 package postgres_test
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"strings"
 	"testing"
@@ -156,5 +159,59 @@ func TestConnStringIgnoresPGDATABASE(t *testing.T) {
 	got, err := c.ConnString()
 	if err != nil || !strings.HasSuffix(got.Reveal(), "/a") {
 		t.Fatalf("got %q %v", got.Reveal(), err)
+	}
+}
+
+// U41 (finding R1 of the review of PR 5)
+func TestRiskyQueryKeysRejected(t *testing.T) {
+	for _, key := range []string{"dbname", "database", "host", "hostaddr", "port", "service", "servicefile", "DBName"} {
+		u := "postgres://u:s3cr3t@h:5432/a?sslmode=disable&" + key + "=other_service"
+		c := postgres.Config{URL: config.Secret(u), Database: "a"}
+		_, err := c.ConnString()
+		if !errors.Is(err, postgres.ErrInvalidURL) {
+			t.Errorf("ConnString %s: %v", key, err)
+			continue
+		}
+		if strings.Contains(err.Error(), "other_service") || strings.Contains(err.Error(), "s3cr3t") {
+			t.Errorf("ConnString %s: the error has a value: %v", key, err)
+		}
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("ConnString %s: the error does not name the key: %v", key, err)
+		}
+		start := time.Now()
+		if _, err := postgres.New(t.Context(), c); !errors.Is(err, postgres.ErrInvalidURL) || time.Since(start) > time.Second {
+			t.Errorf("New %s: %v", key, err)
+		}
+	}
+	c := postgres.Config{URL: "postgres://u:p@h:5432/a?sslmode=disable&application_name=x", Database: "a"} //nolint:gosec // test data
+	if _, err := c.ConnString(); err != nil {
+		t.Errorf("harmless key: %v", err)
+	}
+}
+
+// U42 (finding R2 of the review of PR 5)
+func TestNewWarnsWithoutTLS(t *testing.T) {
+	old := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(old) })
+	for _, tt := range []struct {
+		query string
+		warn  bool
+	}{
+		{"", true}, {"?sslmode=disable", true}, {"?sslmode=allow", true}, {"?sslmode=prefer", true},
+		{"?sslmode=require", false}, {"?sslmode=verify-ca", false}, {"?sslmode=verify-full", false},
+	} {
+		var out bytes.Buffer
+		slog.SetDefault(slog.New(slog.NewTextHandler(&out, nil)))
+		c := cfgFor(t, "/a"+tt.query, "a")
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		_, _ = postgres.New(ctx, c)
+		cancel()
+		got := strings.Contains(out.String(), "does not require TLS")
+		if got != tt.warn {
+			t.Errorf("query %q: warn is %v, want %v: %s", tt.query, got, tt.warn, out.String())
+		}
+		if strings.Contains(out.String(), "s3cr3t") {
+			t.Errorf("query %q: the log has the password", tt.query)
+		}
 	}
 }
