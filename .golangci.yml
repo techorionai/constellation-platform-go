@@ -1,0 +1,68 @@
+version: "2"
+
+run:
+  # Lint the integration test files too.
+  build-tags:
+    - integration
+
+linters:
+  default: standard
+  enable:
+    - misspell
+    - depguard
+    - gosec
+    - errorlint
+    - bodyclose
+    - noctx
+  settings:
+    depguard:
+      rules:
+        # The root packages hold ports and logic. They do not import drivers.
+        # The globs match the files of the root package only. They do not match
+        # the files of the adapter subpackages, for example migrate/postgres.
+        root-no-drivers:
+          files:
+            - "**/migrate/*.go"
+            - "**/health/*.go"
+            - "**/secrets/*.go"
+            - "**/retention/*.go"
+          deny:
+            - pkg: github.com/jackc/pgx
+              desc: A root package must not import a PostgreSQL driver. Use an adapter package.
+            - pkg: github.com/valkey-io/valkey-go
+              desc: A root package must not import a Valkey driver. Use an adapter package.
+        # This rule also matches the sub-packages of net/http, for example
+        # net/http/httptest.
+        root-no-http:
+          files:
+            - "**/migrate/*.go"
+            - "**/secrets/*.go"
+            - "**/retention/*.go"
+          deny:
+            - pkg: net/http
+              desc: This root package must not import net/http.
+        # The config package is the base of the module. It imports no other
+        # package of this module. This applies to the test files too.
+        config-no-module:
+          list-mode: lax
+          files:
+            - "**/config/*.go"
+          allow:
+            - github.com/techorionai/constellation-platform-go/config
+          deny:
+            - pkg: github.com/techorionai/constellation-platform-go
+              desc: The config package must not import other packages of this module.
+        # Production code does not import the test helpers.
+        no-test-helpers-in-production:
+          files:
+            - "$all"
+            - "!$test"
+            - "!**/resources/test/**"
+          deny:
+            - pkg: github.com/techorionai/constellation-platform-go/resources/test
+              desc: Only test code can import the test helpers.
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
