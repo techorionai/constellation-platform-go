@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	collogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -363,5 +365,36 @@ func TestRuntimeMetrics(t *testing.T) {
 			t.Fatal("runtime metric go.goroutine.count not found")
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+type spySpanExporter struct{ shutdowns int }
+
+func (s *spySpanExporter) ExportSpans(context.Context, []sdktrace.ReadOnlySpan) error { return nil }
+
+func (s *spySpanExporter) Shutdown(context.Context) error {
+	s.shutdowns++
+	return nil
+}
+
+// U45 (finding R7 of the review of PR 5)
+func TestSelectExportersShutsDownOnError(t *testing.T) {
+	clearOTELEnv(t)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+	spy := &spySpanExporter{}
+	f := factories{
+		spans:   func(context.Context) (sdktrace.SpanExporter, error) { return spy, nil },
+		metrics: func(context.Context) (sdkmetric.Reader, error) { return nil, errors.New("metrics failed") },
+		logs:    autoFactories.logs,
+	}
+	e, err := selectWith(t.Context(), f)
+	if err == nil || !strings.Contains(err.Error(), "metrics failed") {
+		t.Fatalf("got %v", err)
+	}
+	if e.spans != nil || e.metrics != nil || e.logs != nil {
+		t.Fatalf("got exporters: %+v", e)
+	}
+	if spy.shutdowns != 1 {
+		t.Fatalf("the span exporter was shut down %d times, want 1", spy.shutdowns)
 	}
 }
