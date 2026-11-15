@@ -14,6 +14,11 @@ go get github.com/techorionai/constellation-platform-go@vX.Y.Z
 | [`telemetry`](#telemetry) | Set up OpenTelemetry traces, metrics, and logs. |
 | [`clients/postgres`](#clientspostgres) | Create a PostgreSQL pool. |
 | [`clients/valkey`](#clientsvalkey) | Create a Valkey client and make keys. |
+| [`migrate`](#migrate) | Run the migrations at startup with a lock. |
+| [`migrate/postgres`](#migratepostgres) | PostgreSQL advisory lock and golang-migrate adapters. |
+| [`health`](#health) | Liveness and readiness endpoints on the admin port. |
+| [`health/postgres`](#healthpostgres) | PostgreSQL checker for readiness. |
+| [`health/valkey`](#healthvalkey) | Valkey checker for readiness. |
 | [`resources/test/containers`](#resourcestestcontainers) | Start PostgreSQL and Valkey containers in tests. |
 | [`resources/test/mock`](#resourcestestmock) | Mocks of ports. |
 
@@ -51,6 +56,81 @@ if err != nil {
 	log.Fatal(err)
 }
 defer kv.Close()
+```
+
+## Startup order
+
+A service with migrations and the admin server follows this order. A failed connection in step 3 writes an `error` log record and stops the service with a non-zero exit code. The orchestrator starts it again. `clients/postgres` and `clients/valkey` have a connect timeout, so this step does not wait for a long time. The admin server already runs during `migrate.Run`, so the liveness probe gets `200` during a long migration.
+
+```go
+ctx := context.Background()
+
+var cfg struct {
+	LogLevel slog.Level      `env:"LOG_LEVEL" envDefault:"INFO"`
+	Database postgres.Config `envPrefix:"DATABASE__"`
+	Valkey   valkey.Config   `envPrefix:"VALKEY__"`
+	Admin    health.Config   `envPrefix:"ADMIN__"`
+}
+// 1. Load the config.
+if err := config.Load("IDENTITY_", &cfg); err != nil {
+	log.Fatal(err)
+}
+// 2. Set up OpenTelemetry.
+tel, err := telemetry.Setup(ctx, telemetry.Options{
+	ServiceName: "identity", ServiceVersion: "1.0.0", LogLevel: cfg.LogLevel,
+})
+if err != nil {
+	log.Fatal(err)
+}
+// 3. Connect to PostgreSQL and Valkey, and make the checkers. A failed
+// connection stops the service with a non-zero exit code.
+db, err := postgres.New(ctx, cfg.Database)
+if err != nil {
+	log.Fatal(err)
+}
+kv, err := valkey.New(ctx, cfg.Valkey)
+if err != nil {
+	log.Fatal(err)
+}
+pgCheck, err := healthpg.NewChecker(ctx, db.Pool)
+if err != nil {
+	log.Fatal(err)
+}
+
+// 4. Start the admin server. /livez is 200. /readyz is 503.
+state := health.NewState(pgCheck, healthvk.NewChecker(kv.Raw))
+admin := health.NewServer(cfg.Admin, state)
+go func() {
+	if err := admin.ListenAndServe(); err != nil {
+		log.Print(err)
+	}
+}()
+
+// 5. Run the migrations. A service embeds its files with
+// //go:embed migrations/*.sql and passes fs.Sub(files, "migrations").
+files := fstest.MapFS{
+	"000001_init.up.sql": {Data: []byte("CREATE TABLE users (id uuid PRIMARY KEY);")},
+}
+migrator, err := migratepg.NewMigrator(db.Pool, files, migratepg.MigratorOptions{})
+if err != nil {
+	log.Fatal(err)
+}
+if _, err := migrate.Run(ctx, migratepg.NewLocker(db.Pool, ""), migrator, migrate.Options{}); err != nil {
+	log.Fatal(err)
+}
+
+// 6. Start the background jobs and the API server.
+// 7. Tell the state that the service is ready.
+state.MarkStarted()
+
+// 8. On a stop signal, do these steps in this order:
+_ = admin.Drain(ctx) // the load balancer sees 503 during DrainDelay
+// Stop the API server and the jobs.
+pgCheck.Close()
+kv.Close()
+db.Close()
+_ = tel.Shutdown(ctx)
+_ = admin.Shutdown(ctx) // the admin server stops last
 ```
 
 ## config
@@ -304,6 +384,298 @@ Rules and limits:
 
   `valkey-go` does not use a classic pool, so "used" and "idle" counts do not apply. `valkeyotel` also makes a span for each command.
 
+## migrate
+
+Purpose: run the database migrations of a service at startup. Only one instance runs the migrations. The other instances wait. The package is a port with the function `Run`. The adapters are in [`migrate/postgres`](#migratepostgres).
+
+Import path: `github.com/techorionai/constellation-platform-go/migrate`
+
+Environment variables: None.
+
+Use:
+
+```go
+res, err := migrate.Run(context.Background(), sampleLocker{}, sampleMigrator{}, migrate.Options{})
+if err != nil {
+	fmt.Println(err)
+	return
+}
+fmt.Println(res.Applied, res.ToVersion)
+// Output: 2 3
+```
+
+`sampleLocker` and `sampleMigrator` do no database work. A service uses the adapters of `migrate/postgres`.
+
+Errors:
+
+- `ErrLockTimeout`: `Run` did not get the lock in `Options.LockTimeout`.
+- `ErrDirty`: the database has a failed migration.
+- `ErrInvalidOptions`: `Options.Name` does not match `^[a-z_][a-z0-9_]{0,62}$`, or `Options.LockTimeout` is negative. `Run` does not call `Lock`.
+- If the context ends, the error wraps the error of the context.
+
+Rules and limits:
+
+- `Run` takes the lock, calls `Up`, and releases the lock. The release also happens when `Up` fails or when the context ends.
+- `Options.LockTimeout` is the maximum wait for the lock. `0` gives 10 minutes. A waiting instance can wait longer than 15 seconds, which is the golang-migrate default.
+- `Options.Name` names the migration set. An empty name gives `schema_migrations`. Use the same name for the locker, for `MigratorOptions.MigrationsTable`, and for `Options.Name`.
+- The package must not import a database driver or `net/http`. The `depguard` rules enforce it.
+- `Run` writes log records, makes the span `migrate.run`, and records the metric `migrate.duration` (histogram, unit `s`). All three have the attribute `migrate.name`. The metric also has the attribute `outcome`:
+
+  | `outcome` | When |
+  | --------- | ---- |
+  | `ok` | `Up` returned no error and `Ahead` is false. |
+  | `ahead` | `Up` returned no error and `Ahead` is true. |
+  | `lock_timeout` | `Run` returned `ErrLockTimeout`. |
+  | `dirty` | `Run` returned `ErrDirty`. |
+  | `canceled` | The parent context ended. |
+  | `error` | All other errors. |
+
+- If `Result.Ahead` is true, the database version is higher than the newest version in the source. `Run` writes a `warn` log record with `from_version` and `to_version`, which are the database version. This is normal during a rolling upgrade or a rollback.
+
+## migrate/postgres
+
+Purpose: the PostgreSQL adapters of `migrate`. `Locker` is a session advisory lock. `Migrator` runs golang-migrate on one pool connection.
+
+Import path: `github.com/techorionai/constellation-platform-go/migrate/postgres`
+
+Environment variables: None.
+
+Use:
+
+```go
+ctx := context.Background()
+
+var cfg struct {
+	Database clientpg.Config `envPrefix:"DATABASE__"`
+}
+if err := config.Load("IDENTITY_", &cfg); err != nil {
+	log.Fatal(err)
+}
+db, err := clientpg.New(ctx, cfg.Database)
+if err != nil {
+	log.Fatal(err)
+}
+defer db.Close()
+
+files := fstest.MapFS{
+	"000001_create_users.up.sql":   {Data: []byte("CREATE TABLE users (id uuid PRIMARY KEY);")},
+	"000001_create_users.down.sql": {Data: []byte("DROP TABLE users;")},
+}
+migrator, err := migratepg.NewMigrator(db.Pool, files, migratepg.MigratorOptions{})
+if err != nil {
+	log.Fatal(err)
+}
+locker := migratepg.NewLocker(db.Pool, "")
+if _, err := migrate.Run(ctx, locker, migrator, migrate.Options{}); err != nil {
+	log.Fatal(err)
+}
+```
+
+Errors:
+
+- `ErrPoolTooSmall`: the pool has `MaxConns` below 2.
+- `NewMigrator` also returns an error if the source has no migration file, or if `MigrationsTable` does not match `^[a-z_][a-z0-9_]{0,62}$`.
+- `Up` returns an error that wraps `migrate.ErrDirty` if the database is dirty. No error contains a connection string or a password, because the migrator uses the pool and gets no URL.
+
+Rules and limits:
+
+- The lock key is `int64` of the 64-bit FNV-1a hash of `constellation:migrate:` plus the name. golang-migrate takes its own advisory lock after this lock. The keys are different, so there is no deadlock.
+- `Lock` takes one connection from the pool and runs `pg_advisory_lock`. If `Lock` fails, also when the context ends, the adapter closes the connection and does not return it to the pool.
+- `NewMigrator` does no database work and gets no connection.
+- `Run` uses two pool connections at the same time: one for the lock and one for golang-migrate. The pool needs `MaxConns` of 2 or more. `Up` closes its connection at the end, also after an error. The pool stays open.
+- The migration files are at the root of the source. A service that embeds `migrations/*.sql` passes `fs.Sub(files, "migrations")`.
+- The migrator runs up migrations only. An operator runs a down migration by hand.
+- If the database version is higher than the newest version in the source, `Up` applies nothing and returns `Result{Ahead: true}`.
+- If the context ends during a migration, `Up` completes the current migration, applies no more, and returns the error of the context. The database is not dirty. The grace period of the orchestrator must be longer than the longest single migration.
+- A dirty database stops the service. See "Dirty database" below.
+- A connection pooler such as PgBouncer in transaction mode breaks session advisory locks. Migrations need a direct connection or a pool in session mode.
+- `Up` uses `database/sql` and `stdlib.OpenDBFromPool`. The golang-migrate driver `database/pgx/v5` of the version in `go.mod` has no `WithConnection` function, so the migrator uses `WithInstance`. The `MaxConns` check is the control for the wait for a connection.
+- golang-migrate sends each file in one call. PostgreSQL runs a call with more than one statement in one implicit transaction. A file with `CREATE INDEX CONCURRENTLY` must have only that statement.
+
+Dirty database. A failed migration leaves the database dirty, and the next start returns `ErrDirty` with the version. The operator does these steps:
+
+1. Read the version in the table `schema_migrations` (or the table of the migration set).
+2. Fix the database by hand, so that it matches a complete migration or the version before it.
+3. Run `migrate force <version>` of the golang-migrate CLI with a direct connection.
+4. Start the service again.
+
+## health
+
+Purpose: the liveness and readiness endpoints on a separate admin port. The package is a port with the interface `Checker`, the readiness `State`, the handlers, and the admin `Server`.
+
+Import path: `github.com/techorionai/constellation-platform-go/health`
+
+Environment variables: nest `health.Config` with `envPrefix:"ADMIN__"`.
+
+| Name | Type | Default | Use |
+| ---- | ---- | ------- | --- |
+| `<PREFIX>ADMIN__ADDR` | string | `:9090` | Optional. |
+| `<PREFIX>ADMIN__CHECK_TIMEOUT` | duration | `2s` | Optional. |
+| `<PREFIX>ADMIN__DRAIN_DELAY` | duration | `5s` | Optional. |
+
+Use. The checkers are optional. A service gives only the checkers that it needs:
+
+```go
+ctx := context.Background()
+var (
+	db *clientpg.Client
+	kv *clientvk.Client
+)
+pgCheck, err := healthpg.NewChecker(ctx, db.Pool)
+if err != nil {
+	log.Fatal(err)
+}
+defer pgCheck.Close()
+
+states := []*health.State{
+	// PostgreSQL only
+	health.NewState(pgCheck),
+	// Valkey only
+	health.NewState(healthvk.NewChecker(kv.Raw)),
+	// Both
+	health.NewState(pgCheck, healthvk.NewChecker(kv.Raw)),
+	// None, for a service that has no database
+	health.NewState(),
+}
+for _, state := range states {
+	state.MarkStarted()
+}
+```
+
+A custom checker:
+
+```go
+state := health.NewState(alwaysOK{})
+handler := health.NewHandler(state, health.Config{})
+
+get := func(path string) string {
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, nil))
+	body, _ := io.ReadAll(rec.Result().Body)
+	return fmt.Sprintf("%d %s", rec.Code, body)
+}
+fmt.Print(get("/readyz"))
+state.MarkStarted()
+fmt.Print(get("/readyz"))
+// Output:
+// 503 {"type":"about:blank","title":"Service Unavailable","status":503,"detail":"The service is not ready.","code":"service_not_ready"}
+// 200 {"status":"ready","checks":{"cache":"ok"}}
+```
+
+`alwaysOK` is a type with the methods `Name() string` and `Check(ctx) error`. Each such type is a checker.
+
+The admin server and the graceful stop:
+
+```go
+ctx := context.Background()
+state := health.NewState()
+srv := health.NewServer(health.Config{Addr: ":9090"}, state)
+go func() {
+	if err := srv.ListenAndServe(); err != nil {
+		log.Print(err)
+	}
+}()
+
+// ... run the migrations and start the API server ...
+state.MarkStarted()
+
+// On a stop signal:
+_ = srv.Drain(ctx)    // /readyz is 503 during DrainDelay
+_ = srv.Shutdown(ctx) // the admin server stops last
+```
+
+Errors: `NewState` panics if a checker has an empty name or if two checkers have the same name. This is a programming error. `Server.Drain` returns the error of the context if the context ends before `DrainDelay`.
+
+Rules and limits:
+
+- `/livez` is `200` with `{"status":"ok"}` while the process runs.
+- `/readyz` is `503` until `State.MarkStarted()`, and `503` again after `State.MarkDraining()`. After the start, it runs all checkers at the same time. Each checker gets a context with `CheckTimeout`. If all pass, the response is `200` with `{"status":"ready","checks":{...}}`. The body has only the checks in the list. A checker that has no result after `CheckTimeout` is a failed check, also if it does not obey its context.
+- A `503` body is a problem document (`application/problem+json`, RFC 9457) with the same field names as the `Problem` model of `constellation-contracts`: `type`, `title`, `status`, `detail`, and `code` (`service_not_ready`). The body never contains the error text of a checker. The handler writes that text to the log at the `warn` level.
+- The admin handlers make no OpenTelemetry spans, so a `503` body has no `traceId`.
+- The admin server has no authentication. Do not publish the admin port at the edge. Use it for the probes of the orchestrator only.
+- `DrainDelay` must be longer than the time that the load balancer needs to remove the instance. For a readiness probe, this time is the probe period multiplied by the failure threshold. It must also be longer than the time that the platform needs to remove a stopping instance from the load balancer.
+  - Kubernetes: a readiness probe with `periodSeconds: 5` and `failureThreshold: 2` needs 10 seconds. Set `DrainDelay` to 15 seconds, and set `terminationGracePeriodSeconds` to more than `DrainDelay` plus the stop time of the service.
+  - DigitalOcean App Platform: the health check settings of the component give the period and the failure threshold. Use the same calculation.
+  - The default of 5 seconds suits a probe period of 2 seconds with a failure threshold of 2.
+- The server timeouts are: read header 5 seconds, read 10 seconds, write 10 seconds, idle 60 seconds.
+- `health` can import `net/http`. It cannot import `pgx` or `valkey-go`.
+
+## health/postgres
+
+Purpose: the PostgreSQL checker of `health`.
+
+Import path: `github.com/techorionai/constellation-platform-go/health/postgres`
+
+Environment variables: None.
+
+Use:
+
+```go
+ctx := context.Background()
+
+var cfg struct {
+	Database clientpg.Config `envPrefix:"DATABASE__"`
+}
+if err := config.Load("IDENTITY_", &cfg); err != nil {
+	log.Fatal(err)
+}
+db, err := clientpg.New(ctx, cfg.Database)
+if err != nil {
+	log.Fatal(err)
+}
+defer db.Close()
+
+check, err := healthpg.NewChecker(ctx, db.Pool)
+if err != nil {
+	log.Fatal(err)
+}
+defer check.Close()
+
+state := health.NewState(check)
+state.MarkStarted()
+```
+
+Errors: `NewChecker` returns an error if the pool is nil or if it cannot make the dedicated pool.
+
+Rules and limits:
+
+- `NewChecker` copies the config of the service pool. It sets `MaxConns` to 1, `MinConns` to 0, and the tracer to nil. It makes a dedicated pool. The check uses the same database and user as the service. A full service pool does not make the check fail, and a real PostgreSQL failure does.
+- The checker uses one more connection for each instance. Include it in `max_connections` of the server.
+- `Name()` is `postgres`. `Check` calls `Ping`. `Close()` closes the dedicated pool and not the service pool.
+
+## health/valkey
+
+Purpose: the Valkey checker of `health`.
+
+Import path: `github.com/techorionai/constellation-platform-go/health/valkey`
+
+Environment variables: None.
+
+Use:
+
+```go
+ctx := context.Background()
+
+var cfg struct {
+	Valkey clientvk.Config `envPrefix:"VALKEY__"`
+}
+if err := config.Load("IDENTITY_", &cfg); err != nil {
+	log.Fatal(err)
+}
+kv, err := clientvk.New(ctx, cfg.Valkey)
+if err != nil {
+	log.Fatal(err)
+}
+defer kv.Close()
+
+state := health.NewState(healthvk.NewChecker(kv.Raw))
+state.MarkStarted()
+```
+
+Errors: None. `Check` returns the error of the `PING`.
+
+Rules and limits: `Name()` is `valkey`. `Check` sends `PING`. `valkey-go` sends commands over shared connections, so a busy client does not block the `PING`. `valkeyotel` makes a span for each `PING`. The trace sampler can drop these spans.
+
 ## resources/test/containers
 
 Purpose: start PostgreSQL and Valkey containers in tests.
@@ -346,14 +718,28 @@ Rules and limits:
 
 ## resources/test/mock
 
-Purpose: hold the mocks of ports. The package has only a package comment at this time.
+Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, and `health.Checker`.
 
 Import path: `github.com/techorionai/constellation-platform-go/resources/test/mock`
 
 Environment variables: None.
 
-Use: None.
+Use:
+
+```go
+l := &mock.Locker{}
+m := &mock.Migrator{UpFunc: func(context.Context) (migrate.Result, error) {
+	return migrate.Result{ToVersion: 2, Applied: 2}, nil
+}}
+res, err := migrate.Run(context.Background(), l, m, migrate.Options{})
+fmt.Println(res.Applied, err, l.UnlockCalls())
+// Output: 2 <nil> 1
+```
 
 Errors: None.
 
-Rules and limits: a mock replaces a port only in a unit test. A server-side integration test uses a test container and a live dependency.
+Rules and limits:
+
+- A mock replaces a port only in a unit test. A server-side integration test uses a test container and a live dependency.
+- Each mock has a function field for each method (`LockFunc`, `UnlockFunc`, `UpFunc`, `CheckFunc`). If the field is nil, the mock succeeds. Each mock counts its calls (`LockCalls`, `UnlockCalls`, `UpCalls`, `CheckCalls`).
+- A mock imports the package of its port. A unit test that imports `resources/test/mock` is in the external test package (`<package>_test`).

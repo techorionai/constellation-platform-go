@@ -49,6 +49,27 @@ Each service has its own PostgreSQL database and its own Valkey key prefix.
 
 See [usage.md](usage.md) for the sample SQL and the sample `ACL SETUSER` command.
 
+## Migrations
+
+- Each service runs its own migrations at startup with `migrate.Run`.
+- Files: `migrations/NNNNNN_<slug>.up.sql` and `.down.sql`, embedded with `embed.FS`. Pass `fs.Sub(files, "migrations")` to `migrate/postgres.NewMigrator`.
+- Each migration works with the current version and the previous version of the service. Expand first, contract in a later release.
+- An instance of the previous version starts when the database has a newer version. `migrate.Run` applies nothing and writes a `warn` log record. This supports rolling upgrades and rollbacks.
+- golang-migrate sends each file in one call. PostgreSQL runs a call with more than one statement in one implicit transaction. A file with `CREATE INDEX CONCURRENTLY` must have only that statement.
+- A stop signal during a migration lets the current migration complete. The grace period of the orchestrator must be longer than the longest single migration.
+- A dirty database stops the service. The operator fixes the database and runs `migrate force <version>` by hand. See [usage.md](usage.md#migratepostgres).
+- Lock key: the advisory lock key is the 64-bit FNV-1a hash of `constellation:migrate:` plus the name of the migration set. `NewLocker`, `MigratorOptions.MigrationsTable`, and `Options.Name` use the same name for one migration set. The lock and the migrations use the same database.
+- The service pool has `MaxConns` of 2 or more, because `Run` uses two connections at the same time.
+
+## Readiness and the admin port
+
+- Each service runs an admin server (`health.Server`) on a separate port. The default is `:9090`. Do not publish the admin port at the edge. The admin server has no authentication.
+- `/livez` is `200` while the process runs. `/readyz` is `503` until the service calls `State.MarkStarted()` after the migrations and the startup work. It is `503` again after `State.MarkDraining()`.
+- Start the admin server before `migrate.Run`, so that the liveness probe gets `200` during a long migration. Stop it last.
+- A `503` body is a problem document. It never contains the error text of a checker. The handler writes that text to the log.
+- The PostgreSQL checker uses a dedicated pool of one connection for each instance. Include it in `max_connections`.
+- `DrainDelay` must be longer than the probe period multiplied by the failure threshold. See [usage.md](usage.md#health).
+
 ## OpenTelemetry
 
 Resource attributes:
@@ -86,6 +107,8 @@ Values of `pgxpool.acquire.result`:
 
 A high rate of `empty` while `used` is equal to `max`, or a high rate of `canceled`, shows that `MaxConns` is too low. The mean wait for a connection is the rate of `pgxpool.acquire.time` divided by the rate of `pgxpool.acquires`.
 
+Migration metric: `migrate.duration` (histogram, unit `s`) with the attributes `migrate.name` and `outcome`. See [usage.md](usage.md#migrate).
+
 Valkey connection metrics come from `valkeyotel`: `valkey_dial_attempt`, `valkey_dial_success`, `valkey_dial_conns`, and `valkey_dial_latency`. See [usage.md](usage.md).
 
 ## Tests
@@ -93,4 +116,5 @@ Valkey connection metrics come from `valkeyotel`: `valkey_dial_attempt`, `valkey
 - Integration tests have the build tag `integration`: `//go:build integration`. Run them with `go test -race -tags=integration ./...`.
 - Server-side integration tests use the test containers of `resources/test/containers` and live dependencies. They do not use mocks or stubs.
 - A mock goes in `resources/test/mock` and replaces a port only in a unit test.
+- A unit test that imports `resources/test/mock` is in the external test package (`<package>_test`), because the mocks import the package under test.
 - Put the test ID of the plan in the test name or in a comment above the test.
