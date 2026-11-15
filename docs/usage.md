@@ -283,6 +283,7 @@ Rules and limits:
   - `-function`, `-script|flush`, and `-script|kill` refuse the commands that change or read the function libraries and the script cache. These are global for the server, and a key pattern does not apply to them.
   - `EVAL`, `EVALSHA`, and `FCALL` stay allowed, because Valkey checks their key arguments against the key pattern.
 - Production TLS rule: set `<PREFIX>VALKEY__TLS` to `true` when the client has a password. `New` writes a `warn` log record if there is a password and `TLS` is `false`, because the server then reads the password in plain text. The package does not require TLS.
+- The client turns off the client-side cache of `valkey-go` (`DisableCache: true`). The cache is on by default and uses server-assisted invalidation with `CLIENT TRACKING`. This package does not use client-side caching.
 - If the server does not allow custom ACL users (some managed services), use one Valkey instance for each service.
 - The operator loads Valkey functions with an admin user. A service does not load its own functions.
 - `valkey-go` commands are typed builders, so the package cannot add the prefix. Make each key with `Client.Keys`. The ACL rule makes Valkey refuse a key without the prefix.

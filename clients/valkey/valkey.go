@@ -81,6 +81,10 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		Username:    cfg.Username,
 		Password:    cfg.Password.Reveal(),
 		Dialer:      net.Dialer{Timeout: timeout},
+		// Turn off the client-side cache of valkey-go. It is on by default and
+		// uses server-assisted invalidation (CLIENT TRACKING). This package
+		// does not use client-side caching, so the client does not keep
+		// cached values in memory or ask the server to track keys.
 		DisableCache: true,
 	}
 	if cfg.TLS {
