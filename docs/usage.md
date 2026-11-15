@@ -138,6 +138,7 @@ Rules and limits:
 
 - A signal gets an exporter only if `OTEL_<SIGNAL>_EXPORTER`, `OTEL_EXPORTER_OTLP_ENDPOINT`, or `OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT` has a value. Without these variables, the service makes no outbound connection.
 - Call `Shutdown` before the process stops. A second call returns nil.
+- `Shutdown` also resets the global state that `Setup` set, if this `Provider` is the one of the last `Setup` call. The global tracer, meter, and logger providers become no-op providers, the global propagator becomes empty, and the default `slog` logger returns to the logger from before `Setup`.
 - `Setup` sets global state. Call it one time for each process.
 - The log level comes from `Options.LogLevel`. `OTEL_LOG_LEVEL` does not change it.
 

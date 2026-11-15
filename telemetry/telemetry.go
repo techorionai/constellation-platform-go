@@ -13,11 +13,14 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	lognoop "go.opentelemetry.io/otel/log/noop"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/propagation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 // ErrMissingServiceName is returned by [Setup] when Options.ServiceName is
@@ -42,12 +45,30 @@ type Provider struct {
 	meter  *sdkmetric.MeterProvider
 	logger *sdklog.LoggerProvider
 	once   sync.Once
+
+	// previous is the default slog logger from before [Setup].
+	previous *slog.Logger
 }
 
+// current is the Provider that the last call of Setup made. Shutdown resets the
+// global state only for this Provider.
+var (
+	currentMu sync.Mutex
+	current   *Provider
+)
+
 // Shutdown flushes and stops all providers. A second call returns nil.
+//
+// If this Provider is the one that the last [Setup] call made, Shutdown also
+// resets the global state that Setup set. The global tracer provider, meter
+// provider, and logger provider become no-op providers. The global propagator
+// becomes empty. The default slog logger returns to the logger from before
+// Setup. If a later Setup call made a newer Provider, Shutdown does not change
+// the global state.
 func (p *Provider) Shutdown(ctx context.Context) error {
 	var err error
 	p.once.Do(func() {
+		p.resetGlobals()
 		err = errors.Join(
 			p.tracer.Shutdown(ctx),
 			p.meter.Shutdown(ctx),
@@ -55,6 +76,20 @@ func (p *Provider) Shutdown(ctx context.Context) error {
 		)
 	})
 	return err
+}
+
+func (p *Provider) resetGlobals() {
+	currentMu.Lock()
+	defer currentMu.Unlock()
+	if current != p {
+		return
+	}
+	current = nil
+	otel.SetTracerProvider(tracenoop.NewTracerProvider())
+	otel.SetMeterProvider(metricnoop.NewMeterProvider())
+	otel.SetLoggerProvider(lognoop.NewLoggerProvider())
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator())
+	slog.SetDefault(p.previous)
 }
 
 // hooks lets the tests of this package add readers and change the log output.
@@ -107,6 +142,7 @@ func setup(ctx context.Context, opts Options, h hooks) (*Provider, error) {
 		return nil, errors.Join(err, tp.Shutdown(ctx), mp.Shutdown(ctx), lp.Shutdown(ctx))
 	}
 
+	previous := slog.Default()
 	otel.SetTracerProvider(tp)
 	otel.SetMeterProvider(mp)
 	otel.SetLoggerProvider(lp)
@@ -124,7 +160,11 @@ func setup(ctx context.Context, opts Options, h hooks) (*Provider, error) {
 	}
 	slog.SetDefault(slog.New(newHandler(opts.LogLevel, handlers)))
 
-	return &Provider{tracer: tp, meter: mp, logger: lp}, nil
+	p := &Provider{tracer: tp, meter: mp, logger: lp, previous: previous}
+	currentMu.Lock()
+	current = p
+	currentMu.Unlock()
+	return p, nil
 }
 
 // newResource builds the resource. The order of the merges gives this

@@ -16,9 +16,12 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	olog "go.opentelemetry.io/otel/log"
+	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 	collogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -430,5 +433,52 @@ func TestTraceFieldsStayOutsideGroups(t *testing.T) {
 	}
 	if _, has := rec["g"]; has {
 		t.Fatalf("empty group in the record: %v", rec)
+	}
+}
+
+// U47 (finding R12 of the review of PR 5)
+func TestShutdownResetsGlobals(t *testing.T) {
+	clearOTELEnv(t)
+	before := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(before) })
+	p, err := setup(t.Context(), Options{ServiceName: "svc"}, hooks{stdout: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otel.GetTracerProvider() != trace.TracerProvider(p.tracer) || slog.Default() == before {
+		t.Fatal("setup did not set the global state")
+	}
+	if err := p.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if otel.GetTracerProvider() == trace.TracerProvider(p.tracer) {
+		t.Error("the global tracer provider is still the shut down provider")
+	}
+	if otel.GetMeterProvider() == metric.MeterProvider(p.meter) {
+		t.Error("the global meter provider is still the shut down provider")
+	}
+	if otel.GetLoggerProvider() == olog.LoggerProvider(p.logger) {
+		t.Error("the global logger provider is still the shut down provider")
+	}
+	if f := otel.GetTextMapPropagator().Fields(); len(f) != 0 {
+		t.Errorf("propagator fields: %v", f)
+	}
+	if slog.Default() != before {
+		t.Error("the default slog logger is not the logger from before Setup")
+	}
+
+	// An old Provider does not reset the state of a newer Provider.
+	p1, err := setup(t.Context(), Options{ServiceName: "svc"}, hooks{stdout: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := setup(t.Context(), Options{ServiceName: "svc"}, hooks{stdout: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p2.Shutdown(t.Context()) //nolint:errcheck
+	_ = p1.Shutdown(t.Context())
+	if otel.GetTracerProvider() != trace.TracerProvider(p2.tracer) {
+		t.Error("an old Provider reset the global state of a newer Provider")
 	}
 }
