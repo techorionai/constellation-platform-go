@@ -1,0 +1,12 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  go:
+    uses: techorionai/constellation-ci/.github/workflows/go.yml@v0.1.0
+    with:
+      integration-command: go test -race -tags=integration ./...
