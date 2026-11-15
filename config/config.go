@@ -50,7 +50,7 @@ func Load(prefix string, dst any) error {
 	}
 
 	var errs []error
-	fields := map[string][]string{}
+	fields := map[string][]candidate{}
 	walk(rv.Elem().Type(), prefix, vars, fields, &errs)
 	if len(errs) > 0 {
 		return joinErrors(errs)
@@ -80,10 +80,16 @@ func joinErrors(errs []error) error {
 	return fmt.Errorf("config: %d errors: %s", len(errs), strings.Join(parts, "; "))
 }
 
+// candidate is one variable that can fill a field with a given Go name.
+type candidate struct {
+	key string
+	typ reflect.Type
+}
+
 // walk finds the variable name of each field. It applies the _FILE rule to the
 // fields with the tag envFile:"true". It records the variable names by field
 // name, so that a parse error can name the variable.
-func walk(t reflect.Type, prefix string, vars map[string]string, fields map[string][]string, errs *[]error) {
+func walk(t reflect.Type, prefix string, vars map[string]string, fields map[string][]candidate, errs *[]error) {
 	for i := 0; i < t.NumField(); i++ {
 		sf := t.Field(i)
 		if !sf.IsExported() {
@@ -103,7 +109,7 @@ func walk(t reflect.Type, prefix string, vars map[string]string, fields map[stri
 			continue
 		}
 		key := prefix + sf.Tag.Get("envPrefix") + name
-		fields[sf.Name] = append(fields[sf.Name], key)
+		fields[sf.Name] = append(fields[sf.Name], candidate{key: key, typ: sf.Type})
 		if sf.Tag.Get("envFile") != "true" {
 			continue
 		}
@@ -133,7 +139,7 @@ func trimLineBreak(s string) string {
 
 // sanitize turns the errors of the env library into errors that never contain
 // a value.
-func sanitize(err error, vars map[string]string, fields map[string][]string) []error {
+func sanitize(err error, vars map[string]string, fields map[string][]candidate) []error {
 	var agg env.AggregateError
 	if !errors.As(err, &agg) {
 		return []error{errors.New("config: cannot load environment")}
@@ -151,10 +157,7 @@ func sanitize(err error, vars map[string]string, fields map[string][]string) []e
 		case errors.As(e, &empty):
 			out = append(out, fmt.Errorf("variable %s must not be empty", empty.Key))
 		case errors.As(e, &parseErr):
-			names := set(fields[parseErr.Name], vars)
-			if len(names) == 0 {
-				names = fields[parseErr.Name]
-			}
+			names := failing(fields[parseErr.Name], parseErr.Type, vars)
 			out = append(out, fmt.Errorf("invalid value for variable %s (type %s)", strings.Join(names, " or "), parseErr.Type))
 		default:
 			out = append(out, errors.New("config: cannot load environment"))
@@ -163,12 +166,59 @@ func sanitize(err error, vars map[string]string, fields map[string][]string) []e
 	return out
 }
 
-func set(keys []string, vars map[string]string) []string {
-	var out []string
-	for _, k := range keys {
-		if _, ok := vars[k]; ok {
-			out = append(out, k)
+// failing returns the variable names that caused a parse error. The env
+// library reports only the Go field name and type. Two nested structs can have
+// a field with the same name and type, so the function parses each variable that
+// has a value on its own, and keeps the names that fail.
+func failing(cands []candidate, typ reflect.Type, vars map[string]string) []string {
+	var matches []candidate
+	for _, c := range cands {
+		if c.typ != typ {
+			continue
+		}
+		if _, ok := vars[c.key]; ok {
+			matches = append(matches, c)
 		}
 	}
-	return out
+	if len(matches) == 0 {
+		matches = append(matches, cands...)
+	}
+	if len(matches) > 1 {
+		var bad []candidate
+		for _, c := range matches {
+			if !parses(c, vars) {
+				bad = append(bad, c)
+			}
+		}
+		if len(bad) > 0 {
+			matches = bad
+		}
+	}
+	names := make([]string, len(matches))
+	for i, c := range matches {
+		names[i] = c.key
+	}
+	return names
+}
+
+// parses returns true if the value of the variable of c is valid for its type.
+func parses(c candidate, vars map[string]string) bool {
+	st := reflect.StructOf([]reflect.StructField{{
+		Name: "V",
+		Type: c.typ,
+		Tag:  reflect.StructTag(`env:"` + c.key + `"`),
+	}})
+	probe := reflect.New(st)
+	err := env.ParseWithOptions(probe.Interface(), env.Options{Environment: vars})
+	var agg env.AggregateError
+	if !errors.As(err, &agg) {
+		return err == nil
+	}
+	for _, e := range agg.Errors {
+		var parseErr env.ParseError
+		if errors.As(e, &parseErr) {
+			return false
+		}
+	}
+	return true
 }

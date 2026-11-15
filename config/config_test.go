@@ -200,3 +200,20 @@ func TestLoadFileOnlyWithTag(t *testing.T) {
 		t.Fatalf("got %+v", cfg)
 	}
 }
+
+// U44 (finding R5 of the review of PR 5)
+func TestLoadParseErrorNamesRightVariable(t *testing.T) {
+	type Sub struct {
+		Port int `env:"PORT"`
+	}
+	var cfg struct {
+		A Sub `envPrefix:"A_"`
+		B Sub `envPrefix:"B_"`
+	}
+	t.Setenv("SVC_A_PORT", "80")
+	t.Setenv("SVC_B_PORT", "abc")
+	err := config.Load("SVC_", &cfg)
+	if err == nil || !strings.Contains(err.Error(), "SVC_B_PORT") || strings.Contains(err.Error(), "SVC_A_PORT") || strings.Contains(err.Error(), "abc") {
+		t.Fatalf("got %v", err)
+	}
+}
