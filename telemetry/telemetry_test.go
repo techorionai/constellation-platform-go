@@ -398,3 +398,37 @@ func TestSelectExportersShutsDownOnError(t *testing.T) {
 		t.Fatalf("the span exporter was shut down %d times, want 1", spy.shutdowns)
 	}
 }
+
+// U46 (finding R11 of the review of PR 5)
+func TestTraceFieldsStayOutsideGroups(t *testing.T) {
+	clearOTELEnv(t)
+	var out bytes.Buffer
+	p, err := setup(t.Context(), Options{ServiceName: "svc"}, hooks{stdout: &out})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Shutdown(t.Context()) //nolint:errcheck
+	ctx, span := otel.Tracer("t").Start(t.Context(), "op")
+	defer span.End()
+	slog.Default().With("a", 1).WithGroup("g").With("b", 2).InfoContext(ctx, "msg", "c", 3)
+	var rec map[string]any
+	if err := json.Unmarshal(out.Bytes(), &rec); err != nil {
+		t.Fatalf("%v: %s", err, out.String())
+	}
+	if rec["trace_id"] != span.SpanContext().TraceID().String() || rec["span_id"] != span.SpanContext().SpanID().String() {
+		t.Fatalf("trace fields are not at the top level: %v", rec)
+	}
+	g, ok := rec["g"].(map[string]any)
+	if !ok || rec["a"] != float64(1) || g["b"] != float64(2) || g["c"] != float64(3) || len(g) != 2 {
+		t.Fatalf("record: %v", rec)
+	}
+	out.Reset()
+	slog.Default().WithGroup("g").InfoContext(ctx, "no attrs")
+	rec = nil
+	if err := json.Unmarshal(out.Bytes(), &rec); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := rec["g"]; has {
+		t.Fatalf("empty group in the record: %v", rec)
+	}
+}
