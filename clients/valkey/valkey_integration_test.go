@@ -51,7 +51,9 @@ func TestIntegrationWarnsOnDefaultUser(t *testing.T) {
 		t.Fatalf("PING: %q %v", got, err)
 	}
 	out := buf.String()
-	if strings.Count(out, `"level":"WARN"`) != 1 || !strings.Contains(out, "default user") {
+	// The admin config has a password and no TLS, so New also writes the warn
+	// record of finding R2 of the review of PR 5. Count the default user record.
+	if strings.Count(out, "default user") != 1 || !strings.Contains(out, `"level":"WARN"`) {
 		t.Fatalf("log output: %s", out)
 	}
 }
