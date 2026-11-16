@@ -559,9 +559,11 @@ func TestRunJobsAreIndependent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := runInBackground(r, ctx)
 
-	// Both jobs ask for a start wait. The test ends both.
-	nextRequest(t, reqs).ch <- time.Now()
-	nextRequest(t, reqs).ch <- time.Now()
+	// Both jobs ask for a start wait. Read both requests before the test ends
+	// one. Then the second request cannot be a later request of job b.
+	first, second := nextRequest(t, reqs), nextRequest(t, reqs)
+	first.ch <- time.Now()
+	second.ch <- time.Now()
 	waitFor(t, "a blocks", func() bool { return pa.PurgeCalls() == 1 })
 	// b runs ticks while a blocks. Its interval requests have d = 1m.
 	for tick := 1; tick <= 2; tick++ {
