@@ -52,6 +52,33 @@ linters:
           deny:
             - pkg: github.com/techorionai/constellation-platform-go
               desc: The config package must not import other packages of this module.
+        # An adapter does not import another adapter package of this module.
+        # Each rule lists the other adapters. The file globs match only the files
+        # of one adapter package.
+        adapter-migrate-postgres:
+          files:
+            - "**/migrate/postgres/*.go"
+          deny:
+            - pkg: github.com/techorionai/constellation-platform-go/health/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/health/valkey
+              desc: An adapter must not import another adapter.
+        adapter-health-postgres:
+          files:
+            - "**/health/postgres/*.go"
+          deny:
+            - pkg: github.com/techorionai/constellation-platform-go/migrate/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/health/valkey
+              desc: An adapter must not import another adapter.
+        adapter-health-valkey:
+          files:
+            - "**/health/valkey/*.go"
+          deny:
+            - pkg: github.com/techorionai/constellation-platform-go/migrate/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/health/postgres
+              desc: An adapter must not import another adapter.
         # Production code does not import the test helpers.
         no-test-helpers-in-production:
           files:
