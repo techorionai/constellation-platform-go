@@ -112,6 +112,60 @@ Migration metric: `migrate.duration` (histogram, unit `s`) with the attributes `
 
 Valkey connection metrics come from `valkeyotel`: `valkey_dial_attempt`, `valkey_dial_success`, `valkey_dial_conns`, and `valkey_dial_latency`. See [usage.md](usage.md).
 
+### Metrics of the executors, the cache, and the transactions
+
+Metric attributes never contain keys, values, or other unbounded data. The names of namespaces, executors, and transactions are fixed in the code, so the cardinality stays low.
+
+| Metric | Type | Unit | Attributes | Meaning |
+| ------ | ---- | ---- | ---------- | ------- |
+| `executor.duration` | Histogram | `s` | `executor.name`, `outcome` (`ok`, `error`, `expected_error`) | Duration of one executor call. |
+| `cache.requests` | Counter | `{request}` | `cache.namespace`, `cache.operation` (`get`, `set`, `delete`), `result` (`hit`, `miss`, `ok`, `error`) | One count for each store call. |
+| `cache.duration` | Histogram | `s` | `cache.namespace`, `cache.operation`, `result` | Time of each store call. |
+| `cache.value.size` | Histogram | `By` | `cache.namespace`, `cache.operation` (`get`, `set`) | Size of the encoded value on a hit and on a set. |
+| `cache.load.duration` | Histogram | `s` | `cache.namespace`, `outcome` (`ok`, `error`) | Time of the load function of `GetOrLoad`. |
+| `cache.load.shared` | Counter | `{call}` | `cache.namespace` | `GetOrLoad` calls that used the load result of another call. |
+| `cache.decode.errors` | Counter | `{error}` | `cache.namespace` | Stored values that do not decode. |
+| `constellation.db.transaction.duration` | Histogram | `s` | `db.transaction.name`, `db.transaction.isolation`, `db.transaction.read_only`, `outcome` | Time from the start of the transaction to the end of the commit or the rollback. The count gives the rate of transactions. |
+| `constellation.db.transaction.active` | UpDownCounter | `{transaction}` | `db.transaction.name` | Open transactions now. |
+| `constellation.db.transaction.begin.duration` | Histogram | `s` | `db.transaction.name` | Time to start a transaction, with the wait for a connection. |
+| `constellation.db.transaction.serialization_failures` | Counter | `{failure}` | `db.transaction.name`, `sqlstate` (`40001`, `40P01`) | Serialization failures and deadlocks. |
+| `constellation.db.transaction.nested` | Counter | `{call}` | `db.transaction.name` | `WithinTx` calls that joined an outer transaction. |
+
+- The hit ratio of the cache is `cache.requests{result="hit"}` divided by all `get` requests.
+- Values of `outcome` of `constellation.db.transaction.duration`: `commit`, `rollback` (`fn` returned an error), `panic`, `goexit` (`fn` called `runtime.Goexit`), `commit_error` (`fn` returned nil, but the commit failed), and `begin_error` (the transaction did not start).
+- The transaction metrics start with `constellation.`, because the OpenTelemetry semantic conventions reserve the `db.` namespace and do not define these metrics. The span name `db.transaction` and the attribute names do not change.
+- Histogram boundaries. The default boundaries of the SDK (0 to 10000) suit milliseconds, not seconds or bytes, so each histogram sets its own:
+
+  | Unit | Boundaries |
+  | ---- | ---------- |
+  | `s` | 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10 |
+  | `By` | 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576 |
+
+## Executors and decorators
+
+- A command or a query implements `executor.Executor[P]` or `executor.ExecutorWithReturn[P, R]`. A decorator implements the same interface.
+- Order of the decorators, innermost first: the command, then logging, then tracing. Tracing is the outermost decorator, so the log records have the `trace_id` of the executor span. The sample in section 9 of the hexagonal architecture guide puts logging outermost. This library puts tracing outermost, because only then the log records carry the trace ID.
+- A decorator does not log the params or the result, because they can contain secrets and personal data.
+- The error text goes to the log record and to the span. Some error texts contain input values, for example the PostgreSQL error `invalid input syntax for type uuid: "<value>"`. The text of an error that a command returns must not contain secrets or personal data.
+- Use `decorators.WithErrorClassifier` to mark expected errors (validation errors, "not found"). The span keeps the status `Unset` and `outcome` is `expected_error`. Thus expected errors do not increase the error rate. Use `decorators.WithErrorLevel` to log an expected error at the `info` level.
+
+## Cache
+
+- The cache is not the source of truth. A cache failure must not stop a request. `Cache.GetOrLoad` calls the load function when the cache fails and writes a `warn` log record.
+- A cache entry always has a TTL, from 1 millisecond to 30 days. Use a short TTL for data that changes.
+- A span or a log record never contains a key or a value, because keys can contain personal data. No metric attribute contains a key or a value.
+- Do not put secrets or decrypted secret values in the cache. Valkey data has no encryption at rest. The default JSON codec writes a `config.Secret` field as `"[redacted]"` without an error, so a value with such a field loses the secret in the cache.
+- In `WithinTx`, do not call `Set` or `Delete` directly. Register the call with `Transactor.AfterCommit`. Then another request cannot store the old value again before the commit.
+- Do not call `GetOrLoad` in a `WithinTx` that changes the data that `load` reads. Else the cache can store data that the transaction then rolls back.
+
+## Transactions
+
+- Use `clients/postgres.Conn(ctx, pool)` in each repository adapter, for each call. Then the repository joins the transaction of the caller. A repository that uses the pool directly does not join the transaction.
+- Only the transaction adapter (`transaction/postgres`) calls `clients/postgres.ContextWithTx`. A context with a transaction that the adapter did not start makes `AfterCommit` panic and `WithinTx` return `ErrForeignTx`.
+- An `AfterCommit` hook must obey its context. The adapter gives each hook a time limit (`WithHookTimeout`, default 5 seconds). A hook that does not end in the time limit gets an `error` log record, and its goroutine ends later.
+- A call of `AfterCommit` after the outermost transaction ended, for example from a goroutine that `fn` started, drops the hook and writes an `error` log record.
+- A nested `WithinTx` joins the outer transaction and can set `Name` only. There are no savepoints.
+
 ## Tests
 
 - Integration tests have the build tag `integration`: `//go:build integration`. Run them with `go test -race -tags=integration ./...`.
