@@ -123,6 +123,45 @@ linters:
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/cache/valkey
               desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/secrets/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/retention/postgres
+              desc: An adapter must not import another adapter.
+        adapter-secrets-postgres:
+          # The test files are excluded, because the integration tests of this
+          # adapter use migrate/postgres and transaction/postgres.
+          files:
+            - "**/secrets/postgres/*.go"
+            - "!$test"
+          deny:
+            - pkg: github.com/techorionai/constellation-platform-go/migrate/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/health/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/health/valkey
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/cache/valkey
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/transaction/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/retention/postgres
+              desc: An adapter must not import another adapter.
+        adapter-retention-postgres:
+          files:
+            - "**/retention/postgres/*.go"
+          deny:
+            - pkg: github.com/techorionai/constellation-platform-go/migrate/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/health/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/health/valkey
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/cache/valkey
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/transaction/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/secrets/postgres
+              desc: An adapter must not import another adapter.
         # Production code does not import the test helpers.
         no-test-helpers-in-production:
           files:
