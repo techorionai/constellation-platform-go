@@ -17,5 +17,6 @@
 //	_, err = migrate.Run(ctx, locker, migrator, migrate.Options{})
 //
 // [Run] writes log records, makes the span migrate.run, and records the metric
-// migrate.duration. All three have the attribute migrate.name.
+// migrate.duration. All three have the attribute migrate.name. The span has no
+// error text, because the error of a failed migration can contain SQL text.
 package migrate

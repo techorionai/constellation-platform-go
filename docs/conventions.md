@@ -53,6 +53,7 @@ See [usage.md](usage.md) for the sample SQL and the sample `ACL SETUSER` command
 
 - Each service runs its own migrations at startup with `migrate.Run`.
 - Files: `migrations/NNNNNN_<slug>.up.sql` and `.down.sql`, embedded with `embed.FS`. Pass `fs.Sub(files, "migrations")` to `migrate/postgres.NewMigrator`.
+- Write no secrets and no personal data in migration files, because the error of a failed migration can contain the SQL text and the database detail. `migrate.Run` writes this error to the log.
 - Each migration works with the current version and the previous version of the service. Expand first, contract in a later release.
 - An instance of the previous version starts when the database has a newer version. `migrate.Run` applies nothing and writes a `warn` log record. This supports rolling upgrades and rollbacks.
 - golang-migrate sends each file in one call. PostgreSQL runs a call with more than one statement in one implicit transaction. A file with `CREATE INDEX CONCURRENTLY` must have only that statement.

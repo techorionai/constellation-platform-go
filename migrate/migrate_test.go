@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -347,5 +349,71 @@ func TestRunInvalidName(t *testing.T) {
 		if r["migrate.name"] != "schema_migrations" {
 			t.Fatalf("record = %v", r)
 		}
+	}
+}
+
+// U6
+func TestRunClassifyErrorDuringCancel(t *testing.T) {
+	boom := errors.New("boom")
+	cases := []struct {
+		name    string
+		err     error
+		outcome string
+	}{
+		{"real error", boom, "error"},
+		{"wrapped canceled", fmt.Errorf("step: %w", context.Canceled), "canceled"},
+		{"wrapped deadline", fmt.Errorf("step: %w", context.DeadlineExceeded), "canceled"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := probe(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			m := &mock.Migrator{UpFunc: func(context.Context) (migrate.Result, error) {
+				cancel() // the parent context ends while Up returns its own error
+				return migrate.Result{}, tc.err
+			}}
+			if _, err := migrate.Run(ctx, &mock.Locker{}, m, migrate.Options{}); err == nil {
+				t.Fatal("want error")
+			}
+			got := p.durations(t)
+			if len(got) != 1 || got[0].outcome != tc.outcome {
+				t.Fatalf("metric points = %v, want outcome %s", got, tc.outcome)
+			}
+		})
+	}
+}
+
+// U6
+func TestRunSpanHasNoErrorText(t *testing.T) {
+	p := probe(t)
+	secret := errors.New(`ERROR: duplicate key (SQLSTATE 23505): Key (email)=(jane@example.com) already exists`)
+	m := &mock.Migrator{UpFunc: func(context.Context) (migrate.Result, error) {
+		return migrate.Result{}, fmt.Errorf("migration failed: %w", secret)
+	}}
+	if _, err := migrate.Run(context.Background(), &mock.Locker{}, m, migrate.Options{}); err == nil {
+		t.Fatal("want error")
+	}
+	spans := p.spans.GetSpans()
+	if len(spans) != 1 {
+		t.Fatalf("spans = %v", spans)
+	}
+	s := spans[0]
+	if len(s.Events) != 0 {
+		t.Fatalf("span events = %v, want none", s.Events)
+	}
+	if strings.Contains(s.Status.Description, "jane@example.com") || s.Status.Description != "error" {
+		t.Fatalf("status description = %q", s.Status.Description)
+	}
+	var typ string
+	for _, a := range s.Attributes {
+		if strings.Contains(a.Value.String(), "jane@example.com") {
+			t.Fatalf("attribute %s has the error text", a.Key)
+		}
+		if a.Key == "error.type" {
+			typ = a.Value.AsString()
+		}
+	}
+	if typ != "*errors.errorString" {
+		t.Fatalf("error.type = %q", typ)
 	}
 }

@@ -111,7 +111,9 @@ func Run(ctx context.Context, locker Locker, migrator Migrator, opts Options) (R
 	outcome := classify(ctx, res, err)
 	logResult(ctx, name, res, err, elapsed)
 	if err != nil {
-		span.RecordError(err)
+		// The error text can hold SQL text and database detail, so the span gets
+		// only the outcome and the error type.
+		span.SetAttributes(attribute.String("error.type", errorType(err)))
 		span.SetStatus(codes.Error, outcome)
 	}
 	span.SetAttributes(attribute.String("outcome", outcome))
@@ -161,10 +163,21 @@ func classify(ctx context.Context, res Result, err error) string {
 		return "lock_timeout"
 	case errors.Is(err, ErrDirty):
 		return "dirty"
-	case ctx.Err() != nil:
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return "canceled"
 	default:
 		return "error"
+	}
+}
+
+// errorType returns the Go type of the innermost error in the chain of err.
+func errorType(err error) string {
+	for {
+		next := errors.Unwrap(err)
+		if next == nil {
+			return fmt.Sprintf("%T", err)
+		}
+		err = next
 	}
 }
 

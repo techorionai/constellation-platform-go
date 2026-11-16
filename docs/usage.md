@@ -427,9 +427,11 @@ Rules and limits:
   | `ahead` | `Up` returned no error and `Ahead` is true. |
   | `lock_timeout` | `Run` returned `ErrLockTimeout`. |
   | `dirty` | `Run` returned `ErrDirty`. |
-  | `canceled` | The parent context ended. |
+  | `canceled` | The error wraps `context.Canceled` or `context.DeadlineExceeded`. |
   | `error` | All other errors. |
 
+- On an error, the span has the status `Error` with the outcome as description, and the attribute `error.type` with the Go type of the innermost error. The span has no error event and no error text.
+- The error log record of `Run` holds the full error text. The error of a failed migration can contain SQL text and database detail, for example the values of a row in a unique violation. Do not write secrets or personal data in migration files. Give read access to the logs only to people who can read the database.
 - If `Result.Ahead` is true, the database version is higher than the newest version in the source. `Run` writes a `warn` log record with `from_version` and `to_version`, which are the database version. This is normal during a rolling upgrade or a rollback.
 
 ## migrate/postgres
@@ -475,7 +477,7 @@ Errors:
 
 - `ErrPoolTooSmall`: the pool has `MaxConns` below 2.
 - `NewMigrator` also returns an error if the source has no migration file, or if `MigrationsTable` does not match `^[a-z_][a-z0-9_]{0,62}$`.
-- `Up` returns an error that wraps `migrate.ErrDirty` if the database is dirty. No error contains a connection string or a password, because the migrator uses the pool and gets no URL.
+- `Up` returns an error that wraps `migrate.ErrDirty` if the database is dirty. No error contains a connection string or a password, because the migrator uses the pool and gets no URL. An error of a failed migration can contain the SQL text and the database detail, for example row values. `Run` writes this text to the log. See [migrate](#migrate).
 
 Rules and limits:
 
