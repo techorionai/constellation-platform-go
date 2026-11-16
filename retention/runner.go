@@ -116,6 +116,8 @@ func (r *Runner) Run(ctx context.Context) error {
 		}(&r.jobs[i])
 	}
 	wg.Wait()
+	// With no jobs, Run still waits until ctx ends.
+	<-ctx.Done()
 	return nil
 }
 

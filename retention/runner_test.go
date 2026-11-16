@@ -604,3 +604,26 @@ func TestRunSkipsLockedTickWithoutErrorLog(t *testing.T) {
 		t.Fatalf("log = %s", logs.String())
 	}
 }
+
+// R2: Run with no jobs waits until ctx ends.
+func TestRunNoJobsWaitsForCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newRunner(t, &mock.RetentionLocker{}, retention.RunnerOptions{})
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+	select {
+	case err := <-done:
+		t.Fatalf("Run returned before cancel: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return in 1 second")
+	}
+}
