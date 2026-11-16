@@ -597,7 +597,7 @@ Rules and limits:
   - Kubernetes: a readiness probe with `periodSeconds: 5` and `failureThreshold: 2` needs 10 seconds. Set `DrainDelay` to 15 seconds, and set `terminationGracePeriodSeconds` to more than `DrainDelay` plus the stop time of the service.
   - DigitalOcean App Platform: the health check settings of the component give the period and the failure threshold. Use the same calculation.
   - The default of 5 seconds suits a probe period of 2 seconds with a failure threshold of 2.
-- The server timeouts are: read header 5 seconds, read 10 seconds, write 10 seconds, idle 60 seconds.
+- The server timeouts are: read header 5 seconds, read 10 seconds, write 10 seconds or `CheckTimeout` plus 5 seconds (the longer one), idle 60 seconds.
 - `health` can import `net/http`. It cannot import `pgx` or `valkey-go`.
 
 ## health/postgres

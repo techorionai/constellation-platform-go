@@ -7,6 +7,11 @@ import (
 	"time"
 )
 
+const (
+	minWriteTimeout = 10 * time.Second
+	writeMargin     = 5 * time.Second
+)
+
 // Server runs the admin handler on the admin port.
 type Server struct {
 	http  *http.Server
@@ -15,7 +20,8 @@ type Server struct {
 }
 
 // NewServer makes the admin server. Its timeouts are: read header 5 seconds,
-// read 10 seconds, write 10 seconds, and idle 60 seconds.
+// read 10 seconds, write 10 seconds or CheckTimeout plus 5 seconds (the longer
+// one), and idle 60 seconds.
 func NewServer(cfg Config, state *State) *Server {
 	cfg = cfg.withDefaults()
 	return &Server{
@@ -24,12 +30,19 @@ func NewServer(cfg Config, state *State) *Server {
 			Handler:           NewHandler(state, cfg),
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       10 * time.Second,
-			WriteTimeout:      10 * time.Second,
+			WriteTimeout:      writeTimeout(cfg),
 			IdleTimeout:       60 * time.Second,
 		},
 		state: state,
 		drain: cfg.DrainDelay,
 	}
+}
+
+// writeTimeout returns the write timeout of the server. It is longer than
+// CheckTimeout, so that a slow check cannot close the connection before the
+// handler writes the response.
+func writeTimeout(cfg Config) time.Duration {
+	return max(minWriteTimeout, cfg.CheckTimeout+writeMargin)
 }
 
 // ListenAndServe serves requests until [Server.Shutdown]. It returns nil after

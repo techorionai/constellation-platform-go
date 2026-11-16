@@ -289,3 +289,21 @@ func TestNoSpans(t *testing.T) {
 		t.Fatalf("spans = %d, want 0", n)
 	}
 }
+
+// U14
+func TestServerWriteTimeoutCoversCheckTimeout(t *testing.T) {
+	for _, ct := range []time.Duration{0, time.Second, 8 * time.Second, 30 * time.Second, time.Hour} {
+		cfg := health.Config{CheckTimeout: ct}
+		eff := ct
+		if eff <= 0 {
+			eff = 2 * time.Second
+		}
+		got := health.WriteTimeout(cfg)
+		if got <= eff {
+			t.Fatalf("CheckTimeout %v: write timeout %v is not longer", ct, got)
+		}
+		if got < 10*time.Second {
+			t.Fatalf("CheckTimeout %v: write timeout %v is below 10 s", ct, got)
+		}
+	}
+}
