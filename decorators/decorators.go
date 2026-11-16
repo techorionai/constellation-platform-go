@@ -46,7 +46,10 @@ func WithMeterProvider(mp metric.MeterProvider) Option {
 	return func(s *settings) { s.meterProvider = mp }
 }
 
-// WithLogger sets the logger. The default is slog.Default().
+// WithLogger sets the logger. The default is slog.Default() at the time of the
+// call of the constructor. The decorator keeps that logger. If telemetry.Setup
+// sets the default logger later, the decorator still has the old logger. Make
+// the decorator after telemetry.Setup, or set the logger with WithLogger.
 func WithLogger(l *slog.Logger) Option {
 	return func(s *settings) { s.logger = l }
 }

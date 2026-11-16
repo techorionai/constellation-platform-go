@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -437,6 +438,67 @@ func TestIntegrationTransactor(t *testing.T) {
 		}
 		if count(e.metrics(t)["constellation.db.transaction.duration"], "outcome", "begin_error") != 1 {
 			t.Fatalf("duration: %+v", e.metrics(t)["constellation.db.transaction.duration"])
+		}
+	})
+
+	// R2
+	t.Run("R2 Goexit in fn", func(t *testing.T) {
+		e := newEnv(t, pg, 5)
+		tx := txpg.NewTransactor(e.pool)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_ = tx.WithinTx(context.Background(), func(ctx context.Context) error {
+				if err := insert(ctx, e.pool, "a"); err != nil {
+					return err
+				}
+				runtime.Goexit()
+				return nil
+			}, transaction.Name("goexit_case"))
+		}()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			t.Fatal("the goroutine did not end")
+		}
+		if e.exists(t, "a") {
+			t.Fatal("the row exists")
+		}
+		if n := e.pool.Stat().AcquiredConns(); n != 0 {
+			t.Fatalf("acquired conns = %d", n)
+		}
+		m := e.metrics(t)
+		if n := value(m["constellation.db.transaction.active"]); n != 0 {
+			t.Fatalf("active = %d after Goexit", n)
+		}
+		if count(m["constellation.db.transaction.duration"], "outcome", "goexit") != 1 {
+			t.Fatalf("duration: %+v", m["constellation.db.transaction.duration"])
+		}
+	})
+
+	// R3
+	t.Run("R3 cancel after fn does not stop the commit", func(t *testing.T) {
+		e := newEnv(t, pg, 5)
+		tx := txpg.NewTransactor(e.pool)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		var hookRan bool
+		err := tx.WithinTx(ctx, func(ctx context.Context) error {
+			if err := insert(ctx, e.pool, "a"); err != nil {
+				return err
+			}
+			tx.AfterCommit(ctx, func(context.Context) { hookRan = true })
+			cancel()
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if !e.exists(t, "a") {
+			t.Fatal("the row does not exist")
+		}
+		if !hookRan {
+			t.Fatal("the hook did not run")
 		}
 	})
 

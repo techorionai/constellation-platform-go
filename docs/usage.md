@@ -764,6 +764,7 @@ Rules and limits:
 - `ApplyLogging` writes a `debug` record `executor completed` on success and a record `executor failed` on an error. The level of the second record is `error`. `WithErrorLevel(func(error) slog.Level)` changes it, for example to `info` for a validation error.
 - A decorator never logs the params or the result, because they can contain secrets and personal data.
 - Options: `WithTracerProvider`, `WithMeterProvider`, `WithLogger`, `WithErrorLevel`, and `WithErrorClassifier`. The defaults are the global providers and `slog.Default()`.
+- The decorator reads the global providers and `slog.Default()` when it is made, and it keeps them. Make the decorators after `telemetry.Setup`. A decorator that is made before `telemetry.Setup` keeps the old logger and the old providers.
 - Order, innermost first: the command, then logging, then tracing. Tracing is the outermost decorator, so the log records have the `trace_id` of the executor span.
 
 ## cache
@@ -910,6 +911,7 @@ Rules and limits:
 - Options: `ReadOnly()`, `Isolation(level)`, and `Name(name)`. The levels are `ReadCommitted` (default), `RepeatableRead`, and `Serializable`. `Name` gives the transaction a name for the span and the metrics. The default is `unnamed`. The names are fixed in the code.
 - `Resolve(opts...)` checks the options and returns the settings. The adapter and `mock.Transactor` call it. `Settings.HasTxOptions()` tells if the options include `ReadOnly` or `Isolation`.
 - `WithinTx` commits if `fn` returns nil. It rolls back if `fn` returns an error or panics.
+- If the commit returns an error, the outcome is unknown. The server can have committed the transaction when the connection broke or the time limit ended. `WithinTx` returns an error and does not run the `AfterCommit` hooks, so a cache entry that a hook would delete stays until its TTL ends. Do not assume that the work did not happen. Make the work idempotent, or read the data again before a retry.
 - A nested `WithinTx` joins the outer transaction. It can set `Name` only. There are no savepoints, so an inner error that the outer function ignores does not roll back the inner work alone.
 - `AfterCommit` rules:
   - The hooks run in the order of registration after the commit of the outermost transaction. They do not run if the transaction rolls back or the commit fails.
@@ -964,7 +966,8 @@ Errors: the errors of `transaction`. SQLSTATE `40001` and `40P01` give an error 
 Rules and limits:
 
 - `NewTransactor(pool, opts...)`. `WithHookTimeout(d)` sets the time limit of each `AfterCommit` hook. The default is 5 seconds. A value of 0 or less causes a panic.
-- `WithinTx` starts a transaction with the options, calls `fn` with a context that has the transaction, and commits or rolls back. A panic in `fn` rolls back, then the same panic goes on.
+- `WithinTx` starts a transaction with the options, calls `fn` with a context that has the transaction, and commits or rolls back. A panic in `fn` rolls back, then the same panic goes on. If `fn` calls `runtime.Goexit` (for example through `testing.T.FailNow`), `WithinTx` rolls back, releases the connection, and records the outcome `goexit`.
+- The commit and the rollback use a context that keeps the values of the caller context but not its cancel. The commit has a time limit of 30 seconds and the rollback has a time limit of 10 seconds. A cancel of the caller context after `fn` returns nil does not stop the commit.
 - If a hook does not end in the time limit, the adapter writes an `error` log record and goes on with the next hook. The goroutine of that hook ends later. `WithinTx` returns after all hooks end or reach the time limit.
 - The hook list is safe for concurrent use. Goroutines that `fn` starts can call `AfterCommit`.
 - The hook list closes when the outermost transaction ends. A call of `AfterCommit` after that drops the hook and writes an `error` log record.

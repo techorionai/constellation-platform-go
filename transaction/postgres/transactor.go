@@ -29,6 +29,7 @@ const (
 	DefaultHookTimeout = 5 * time.Second
 
 	rollbackTimeout = 10 * time.Second
+	commitTimeout   = 30 * time.Second
 
 	sqlstateSerialization = "40001"
 	sqlstateDeadlock      = "40P01"
@@ -137,6 +138,19 @@ func pgxOptions(s transaction.Settings) pgx.TxOptions {
 // savepoints, so an inner error that the outer function ignores does not roll
 // back the inner work alone. If ctx has a transaction that this adapter did not
 // start, WithinTx returns [transaction.ErrForeignTx].
+//
+// The commit and the rollback run with a context that keeps the values of ctx
+// but not its cancel, and they have a time limit. A cancel of ctx after fn
+// returns nil does not stop the commit. If fn calls runtime.Goexit, for example
+// through testing.T.FailNow, WithinTx rolls back, releases the connection, and
+// records the outcome goexit before the goroutine ends.
+//
+// If the commit returns an error, the outcome is unknown: the server can have
+// committed the transaction when the connection broke or the time limit ended.
+// WithinTx then returns an error and does not run the AfterCommit hooks, so a
+// cache entry that a hook would delete stays until its TTL ends. A caller must
+// not assume that the work did not happen. Make the work idempotent, or read
+// the data again before a retry.
 func (t *Transactor) WithinTx(ctx context.Context, fn func(ctx context.Context) error, opts ...transaction.Option) error {
 	s, err := transaction.Resolve(opts...)
 	if err != nil {
@@ -172,7 +186,20 @@ func (t *Transactor) WithinTx(ctx context.Context, fn func(ctx context.Context) 
 	list := &hookList{}
 	txCtx := clientspg.ContextWithTx(context.WithValue(ctx, hooksKey{}, list), tx)
 
+	// runtime.Goexit in fn runs the deferred calls but not the code after runFn.
+	// This defer cleans up in that case only.
+	fnReturned := false
+	defer func() {
+		if fnReturned {
+			return
+		}
+		_ = t.rollback(ctx, tx)
+		list.close()
+		t.finish(ctx, span, start, "goexit", true, nameAttr, isoAttr, roAttr)
+	}()
+
 	panicked, panicValue, fnErr := runFn(txCtx, fn)
+	fnReturned = true
 
 	if panicked {
 		_ = t.rollback(ctx, tx)
@@ -191,7 +218,7 @@ func (t *Transactor) WithinTx(ctx context.Context, fn func(ctx context.Context) 
 		return fnErr
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := t.commit(ctx, tx); err != nil {
 		_ = t.rollback(ctx, tx)
 		list.close()
 		t.finish(ctx, span, start, "commit_error", true, nameAttr, isoAttr, roAttr)
@@ -216,6 +243,15 @@ func runFn(ctx context.Context, fn func(ctx context.Context) error) (panicked bo
 	err = fn(ctx)
 	panicked = false
 	return false, nil, err
+}
+
+// commit commits the transaction. The caller context can be done, so the
+// commit uses a context without cancel and with a time limit. A cancel then
+// cannot give an error for a commit that the server accepts.
+func (t *Transactor) commit(ctx context.Context, tx pgx.Tx) error {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), commitTimeout)
+	defer cancel()
+	return tx.Commit(cctx)
 }
 
 // rollback rolls the transaction back. The caller context can be done, so the
