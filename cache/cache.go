@@ -136,6 +136,31 @@ func endSpan(span trace.Span, hit *bool, err error) {
 	span.End()
 }
 
+// callLoad calls load and recovers a panic. The shared function of singleflight
+// runs in its own goroutine, and singleflight panics again in a new goroutine
+// that no caller can recover, so a panic in load must not leave this function.
+// The error and the log record have the type of the panic value only, because
+// the value can contain secret data.
+func (c *Cache[T]) callLoad(ctx context.Context, load func(ctx context.Context) (T, error)) (v T, err error) {
+	returned := false
+	defer func() {
+		if returned {
+			return
+		}
+		r := recover()
+		if r == nil {
+			return // runtime.Goexit, which singleflight handles
+		}
+		slog.ErrorContext(ctx, "cache: the load function panicked",
+			slog.String("cache.namespace", c.namespace), slog.String("panic_type", fmt.Sprintf("%T", r)))
+		var zero T
+		v, err = zero, ErrLoadPanic
+	}()
+	v, err = load(ctx)
+	returned = true
+	return v, err
+}
+
 // fetch reads and decodes one stored key. It records the metrics.
 func (c *Cache[T]) fetch(ctx context.Context, sk string) (T, error) {
 	var zero T
@@ -192,7 +217,8 @@ func (c *Cache[T]) Get(ctx context.Context, key string) (v T, err error) {
 // Set stores the value. The TTL is required. See [CheckTTL].
 func (c *Cache[T]) Set(ctx context.Context, key string, value T, ttl time.Duration) (err error) {
 	ctx, span := c.span(ctx, "Set")
-	defer func() { endSpan(span, nil, err) }()
+	hit := false
+	defer func() { endSpan(span, &hit, err) }()
 	sk, err := c.storeKey(key)
 	if err != nil {
 		return err
@@ -206,7 +232,8 @@ func (c *Cache[T]) Set(ctx context.Context, key string, value T, ttl time.Durati
 // Delete removes the keys. With no keys, it does nothing.
 func (c *Cache[T]) Delete(ctx context.Context, keys ...string) (err error) {
 	ctx, span := c.span(ctx, "Delete")
-	defer func() { endSpan(span, nil, err) }()
+	hit := false
+	defer func() { endSpan(span, &hit, err) }()
 	if len(keys) == 0 {
 		return nil
 	}
@@ -240,6 +267,9 @@ func (c *Cache[T]) Delete(ctx context.Context, keys ...string) (err error) {
 // cancel, with the time limit of [WithLoadTimeout]. If the context of a caller
 // ends, that caller returns the context error and load continues for the other
 // callers. If load returns an error, GetOrLoad returns it and stores nothing.
+// If load panics, the panic does not go to the caller. GetOrLoad recovers it,
+// writes an error log record with the type of the panic value, and returns
+// [ErrLoadPanic] to all callers that wait for the same load.
 //
 // Do not call GetOrLoad in a transaction that changes the data that load reads.
 func (c *Cache[T]) GetOrLoad(ctx context.Context, key string, ttl time.Duration,
@@ -273,7 +303,7 @@ func (c *Cache[T]) GetOrLoad(ctx context.Context, key string, ttl time.Duration,
 		lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.loadTimeout)
 		defer cancel()
 		start := time.Now()
-		val, lerr := load(lctx)
+		val, lerr := c.callLoad(lctx, load)
 		outcome := "ok"
 		if lerr != nil {
 			outcome = "error"

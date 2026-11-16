@@ -20,6 +20,9 @@ var (
 	ErrTooLarge = errors.New("cache: value too large")
 	// ErrDecode means that a stored value does not decode.
 	ErrDecode = errors.New("cache: cannot decode the stored value")
+	// ErrLoadPanic means that the load function of GetOrLoad panicked. The
+	// error does not contain the panic value.
+	ErrLoadPanic = errors.New("cache: the load function panicked")
 )
 
 // Limits that each [Store] enforces.

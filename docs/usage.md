@@ -811,6 +811,7 @@ Errors:
 - `ErrInvalidTTL`: the TTL is shorter than 1 millisecond or longer than 30 days.
 - `ErrTooLarge`: the value is longer than 1 MiB.
 - `ErrDecode`: a stored value does not decode.
+- `ErrLoadPanic`: the `load` function of `GetOrLoad` panicked. `GetOrLoad` recovers the panic, writes an `error` log record with the type of the panic value, and returns this error to all callers that wait for the same load. The error text does not contain the panic value.
 
 Rules and limits:
 

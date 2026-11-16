@@ -283,6 +283,85 @@ func TestGetOrLoadLoadError(t *testing.T) {
 	}
 }
 
+// R1: a panic in load must not stop the process. All callers get ErrLoadPanic.
+func TestGetOrLoadPanicInLoad(t *testing.T) {
+	o := setup(t)
+	store := &mock.CacheStore{}
+	c := cache.New[user](store, "ns")
+	_, err := c.GetOrLoad(t.Context(), "k", ttl, func(context.Context) (user, error) {
+		panic("secret-panic-value")
+	})
+	if !errors.Is(err, cache.ErrLoadPanic) {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "secret-panic-value") {
+		t.Fatalf("the error has the panic value: %v", err)
+	}
+	if store.SetCalls() != 0 {
+		t.Fatalf("set calls = %d", store.SetCalls())
+	}
+	if strings.Contains(o.logText(), "secret-panic-value") || !strings.Contains(o.logText(), "level=ERROR") {
+		t.Fatalf("log: %s", o.logText())
+	}
+	// The cache still works after the panic.
+	v, err := c.GetOrLoad(t.Context(), "k", ttl, func(context.Context) (user, error) { return user{"Ada"}, nil })
+	if err != nil || v.Name != "Ada" {
+		t.Fatalf("got %+v, %v", v, err)
+	}
+}
+
+// R1: callers that wait for the same load all get ErrLoadPanic.
+func TestGetOrLoadPanicSharedByCallers(t *testing.T) {
+	setup(t)
+	c := cache.New[user](&mock.CacheStore{}, "ns")
+	release := make(chan struct{})
+	var started atomic.Int32
+	var wg sync.WaitGroup
+	errs := make([]error, 5)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = c.GetOrLoad(t.Context(), "k", ttl, func(context.Context) (user, error) {
+				started.Add(1)
+				<-release
+				panic("boom")
+			})
+		}()
+	}
+	waitFor(t, func() bool { return started.Load() == 1 })
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	for i, err := range errs {
+		if !errors.Is(err, cache.ErrLoadPanic) {
+			t.Fatalf("call %d: err = %v", i, err)
+		}
+	}
+}
+
+// R16: the spans of Set and Delete have the attribute cache.hit.
+func TestSpansHaveCacheHit(t *testing.T) {
+	o := setup(t)
+	c := cache.New[user](&mock.CacheStore{}, "ns")
+	_ = c.Set(t.Context(), "k", user{"Ada"}, ttl)
+	_ = c.Delete(t.Context(), "k")
+	_, _ = c.Get(t.Context(), "k")
+	found := map[string]bool{}
+	for _, s := range o.exp.GetSpans() {
+		for _, a := range s.Attributes {
+			if a.Key == "cache.hit" {
+				found[s.Name] = a.Value.AsBool()
+			}
+		}
+	}
+	for _, name := range []string{"cache.Set", "cache.Delete", "cache.Get"} {
+		if hit, ok := found[name]; !ok || hit {
+			t.Fatalf("span %s: cache.hit present = %v, value = %v", name, ok, hit)
+		}
+	}
+}
+
 // U14
 func TestGetOrLoadStoreGetError(t *testing.T) {
 	o := setup(t)
