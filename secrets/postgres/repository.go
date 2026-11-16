@@ -92,6 +92,9 @@ func (r *Repository) Delete(ctx context.Context, name string) error {
 
 // ListNames returns the names after p.After in ascending order.
 func (r *Repository) ListNames(ctx context.Context, p secrets.ListParams) (secrets.ListResult, error) {
+	if p.Limit < 1 {
+		return secrets.ListResult{}, errors.New("secrets: the limit must be 1 or more")
+	}
 	rows, err := clientpg.Conn(ctx, r.pool).Query(ctx,
 		`SELECT name FROM platform_secrets WHERE name > $1 ORDER BY name LIMIT $2`, p.After, p.Limit+1)
 	if err != nil {
