@@ -26,6 +26,10 @@ linters:
             - "**/health/*.go"
             - "**/secrets/*.go"
             - "**/retention/*.go"
+            - "**/executor/*.go"
+            - "**/decorators/*.go"
+            - "**/cache/*.go"
+            - "**/transaction/*.go"
           deny:
             - pkg: github.com/jackc/pgx
               desc: A root package must not import a PostgreSQL driver. Use an adapter package.
@@ -38,6 +42,10 @@ linters:
             - "**/migrate/*.go"
             - "**/secrets/*.go"
             - "**/retention/*.go"
+            - "**/executor/*.go"
+            - "**/decorators/*.go"
+            - "**/cache/*.go"
+            - "**/transaction/*.go"
           deny:
             - pkg: net/http
               desc: This root package must not import net/http.
@@ -63,6 +71,10 @@ linters:
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/health/valkey
               desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/cache/valkey
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/transaction/postgres
+              desc: An adapter must not import another adapter.
         adapter-health-postgres:
           files:
             - "**/health/postgres/*.go"
@@ -71,6 +83,10 @@ linters:
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/health/valkey
               desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/cache/valkey
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/transaction/postgres
+              desc: An adapter must not import another adapter.
         adapter-health-valkey:
           files:
             - "**/health/valkey/*.go"
@@ -78,6 +94,34 @@ linters:
             - pkg: github.com/techorionai/constellation-platform-go/migrate/postgres
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/health/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/cache/valkey
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/transaction/postgres
+              desc: An adapter must not import another adapter.
+        adapter-cache-valkey:
+          files:
+            - "**/cache/valkey/*.go"
+          deny:
+            - pkg: github.com/techorionai/constellation-platform-go/migrate/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/health/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/health/valkey
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/transaction/postgres
+              desc: An adapter must not import another adapter.
+        adapter-transaction-postgres:
+          files:
+            - "**/transaction/postgres/*.go"
+          deny:
+            - pkg: github.com/techorionai/constellation-platform-go/migrate/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/health/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/health/valkey
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/cache/valkey
               desc: An adapter must not import another adapter.
         # Production code does not import the test helpers.
         no-test-helpers-in-production:
