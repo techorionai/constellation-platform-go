@@ -19,6 +19,12 @@ go get github.com/techorionai/constellation-platform-go@vX.Y.Z
 | [`health`](#health) | Liveness and readiness endpoints on the admin port. |
 | [`health/postgres`](#healthpostgres) | PostgreSQL checker for readiness. |
 | [`health/valkey`](#healthvalkey) | Valkey checker for readiness. |
+| [`executor`](#executor) | Generic executor interfaces for commands and queries. |
+| [`decorators`](#decorators) | Tracing and logging decorators for executors. |
+| [`cache`](#cache) | Cache port and typed cache with `GetOrLoad`. |
+| [`cache/valkey`](#cachevalkey) | Valkey adapter of the cache port. |
+| [`transaction`](#transaction) | Transaction port with `AfterCommit` hooks. |
+| [`transaction/postgres`](#transactionpostgres) | PostgreSQL adapter of the transaction port. |
 | [`resources/test/containers`](#resourcestestcontainers) | Start PostgreSQL and Valkey containers in tests. |
 | [`resources/test/mock`](#resourcestestmock) | Mocks of ports. |
 
@@ -287,6 +293,8 @@ Rules and limits:
 
 - Do not set `PG*` variables (for example `PGHOST` or `PGDATABASE`) for a service. `pgxpool` uses them as defaults for the parts that the URL does not give. `PGDATABASE` has no effect on the database, but other variables can fill other parts of the connection.
 - Another package that needs a connection string uses `Config.ConnString()`. It does not use `URL` directly.
+- `Conn(ctx, pool)` returns the transaction in `ctx`, or the pool if `ctx` has no transaction. Both have the type `Querier` (`Exec`, `Query`, `QueryRow`, and `SendBatch`). Each repository adapter gets its connection with `postgres.Conn(ctx, r.pool)` for each call, so that it joins the transaction of the caller. A repository that uses the pool directly does not join the transaction.
+- `ContextWithTx` and `TxFromContext` carry the transaction in the context. Only the transaction adapter ([`transaction/postgres`](#transactionpostgres)) calls `ContextWithTx`.
 - `Client.Pool` is the `*pgxpool.Pool`. `Client.Close()` stops the pool metrics, then closes the pool.
 - Metrics: see the table in [conventions.md](conventions.md#metrics). The metrics use the global meter provider.
 
@@ -678,6 +686,342 @@ Errors: None. `Check` returns the error of the `PING`.
 
 Rules and limits: `Name()` is `valkey`. `Check` sends `PING`. `valkey-go` sends commands over shared connections, so a busy client does not block the `PING`. `valkeyotel` makes a span for each `PING`. The trace sampler can drop these spans.
 
+## executor
+
+Purpose: give the generic executor interfaces of the hexagonal architecture guide. A command or a query implements them. A decorator implements the same interface.
+
+Import path: `github.com/techorionai/constellation-platform-go/executor`
+
+Environment variables: None.
+
+Use:
+
+```go
+var create executor.Executor[CreateOrder] = executor.Func[CreateOrder](
+	func(_ context.Context, p CreateOrder) error {
+		fmt.Println("create", p.ID)
+		return nil
+	},
+)
+err := create.Execute(context.Background(), CreateOrder{ID: "o1"})
+fmt.Println(err)
+// Output:
+// create o1
+// <nil>
+```
+
+Errors: None. The package returns the error of the function.
+
+Rules and limits:
+
+- `Executor[P]` has `Execute(ctx, params) error`. `ExecutorWithReturn[P, R]` has `Execute(ctx, params) (R, error)`.
+- `Func` and `FuncWithReturn` turn a function into an executor. Tests and small use cases use them.
+
+## decorators
+
+Purpose: add tracing and logging to an executor.
+
+Import path: `github.com/techorionai/constellation-platform-go/decorators`
+
+Environment variables: None.
+
+Use:
+
+```go
+var cmd executor.ExecutorWithReturn[CreateOrder, string] = executor.FuncWithReturn[CreateOrder, string](
+	func(_ context.Context, p CreateOrder) (string, error) { return "created " + p.ID, nil },
+)
+// The recommended order, innermost first: the command, logging, tracing.
+cmd = decorators.ApplyLogging(cmd, "CreateOrder")
+cmd = decorators.ApplyTracing(cmd, "CreateOrder")
+
+res, err := cmd.Execute(context.Background(), CreateOrder{ID: "o1"})
+fmt.Println(res, err)
+// Output: created o1 <nil>
+```
+
+Use `WithErrorClassifier` for expected errors:
+
+```go
+errValidation := errors.New("validation")
+cmd := executor.FuncWithReturn[int, int](func(context.Context, int) (int, error) { return 0, errValidation })
+// A validation error is expected. The span keeps the status Unset.
+traced := decorators.ApplyTracing[int, int](cmd, "Validate",
+	decorators.WithErrorClassifier(func(err error) bool { return !errors.Is(err, errValidation) }))
+_, err := traced.Execute(context.Background(), 1)
+fmt.Println(err)
+// Output: validation
+```
+
+Errors: a decorator returns the error of the wrapped executor without a change, so `errors.Is` and `errors.As` work. An invalid name causes a panic when you make the decorator.
+
+Rules and limits:
+
+- Functions: `ApplyTracing`, `ApplyLogging`, `ApplyTracingNoResult`, and `ApplyLoggingNoResult`. The `NoResult` forms wrap `executor.Executor`.
+- The name matches `^[A-Za-z][A-Za-z0-9_.]{0,63}$`.
+- `ApplyTracing` makes the span `executor:<name>` with the attribute `executor.name`, and records `executor.duration`. See the metrics table in [conventions.md](conventions.md#metrics).
+- `WithErrorClassifier(func(error) bool)`: return false for an expected error, for example a validation error or "not found". The span records the error event and keeps the status `Unset`, and `outcome` is `expected_error`. Without this option, each error is a failure.
+- `ApplyLogging` writes a `debug` record `executor completed` on success and a record `executor failed` on an error. The level of the second record is `error`. `WithErrorLevel(func(error) slog.Level)` changes it, for example to `info` for a validation error.
+- A decorator never logs the params or the result, because they can contain secrets and personal data.
+- Options: `WithTracerProvider`, `WithMeterProvider`, `WithLogger`, `WithErrorLevel`, and `WithErrorClassifier`. The defaults are the global providers and `slog.Default()`.
+- Order, innermost first: the command, then logging, then tracing. Tracing is the outermost decorator, so the log records have the `trace_id` of the executor span.
+
+## cache
+
+Purpose: the cache port and the typed cache. The adapter is in [`cache/valkey`](#cachevalkey).
+
+Import path: `github.com/techorionai/constellation-platform-go/cache`
+
+Environment variables: None.
+
+Use:
+
+```go
+// A service uses the Valkey adapter. This sample uses the mock store.
+var store cache.Store = &mock.CacheStore{}
+profiles := cache.New[Profile](store, "profile")
+
+load := func(context.Context) (Profile, error) {
+	fmt.Println("load")
+	return Profile{Name: "Ada"}, nil
+}
+for range 2 {
+	p, err := profiles.GetOrLoad(context.Background(), "user:42", time.Minute, load)
+	fmt.Println(p.Name, err)
+}
+// Output:
+// load
+// Ada <nil>
+// Ada <nil>
+```
+
+`Instrument` records the store metrics for code that uses a `Store` without `Cache[T]`:
+
+```go
+store := cache.Instrument(&mock.CacheStore{}, "raw")
+err := store.Set(context.Background(), "k", []byte("v"), time.Minute)
+fmt.Println(err)
+// Output: <nil>
+```
+
+Errors:
+
+- `ErrMiss`: the key does not exist.
+- `ErrInvalidKey`: the key is empty or longer than 256 bytes.
+- `ErrInvalidTTL`: the TTL is shorter than 1 millisecond or longer than 30 days.
+- `ErrTooLarge`: the value is longer than 1 MiB.
+- `ErrDecode`: a stored value does not decode.
+
+Rules and limits:
+
+- `Store` has `Get`, `Set`, and `Delete`. `cache.CheckKey`, `cache.CheckTTL`, and `cache.CheckValue` do the checks. Each adapter calls them before it sends a command.
+- The namespace of `New` matches `^[a-z][a-z0-9_]{0,31}$`. An invalid namespace causes a panic. The store key is `<namespace>:<key>`, so the namespace counts in the limit of 256 bytes.
+- A cache entry always has a TTL. Use a short TTL for data that changes.
+- The default codec is JSON. `WithCodec` changes it. The JSON codec writes a `config.Secret` field as `"[redacted]"` without an error. Do not put secrets in the cache.
+- `GetOrLoad` checks the key and the TTL first. It returns `ErrInvalidKey` or `ErrInvalidTTL` without a call of `load`.
+- A miss, a decode error, and a store error all lead to a call of `load`. A store error or a decode error gives a `warn` log record. The cache is not the source of truth.
+- Calls for the same key in one process at the same time share one `load` call and one `Set`. Other instances can also load. `load` gets the context of the first caller without its cancel, with a time limit. `WithLoadTimeout(d)` sets it. The default is 10 seconds. If the context of a caller ends, that caller returns the context error and `load` continues for the other callers.
+- If `load` returns an error, `GetOrLoad` returns it and stores nothing.
+- Each method makes a span `cache.<method>` with the attributes `cache.namespace` and `cache.hit`. A span, a log record, or a metric attribute never contains a key or a value.
+- Metrics: see [conventions.md](conventions.md#metrics).
+- In `WithinTx`, call `Set` and `Delete` through `AfterCommit`. Do not call `GetOrLoad` in a `WithinTx` that changes the data that `load` reads.
+
+## cache/valkey
+
+Purpose: the Valkey adapter of `cache.Store`.
+
+Import path: `github.com/techorionai/constellation-platform-go/cache/valkey`
+
+Environment variables: None. The adapter uses the client of [`clients/valkey`](#clientsvalkey).
+
+Use:
+
+```go
+ctx := context.Background()
+
+var cfg struct {
+	Valkey clientvk.Config `envPrefix:"VALKEY__"`
+}
+if err := config.Load("IDENTITY_", &cfg); err != nil {
+	log.Fatal(err)
+}
+kv, err := clientvk.New(ctx, cfg.Valkey)
+if err != nil {
+	log.Fatal(err)
+}
+defer kv.Close()
+
+profiles := cache.New[Profile](cachevk.NewStore(kv), "profile")
+p, err := profiles.GetOrLoad(ctx, "user:42", time.Minute,
+	func(context.Context) (Profile, error) { return Profile{Name: "Ada"}, nil })
+if err != nil {
+	log.Fatal(err)
+}
+log.Print(p.Name)
+```
+
+Errors: the errors of `cache`. `Get` maps a nil reply to `cache.ErrMiss`. It wraps each other error, for example `NOPERM`, and that error is not `ErrMiss`.
+
+Rules and limits:
+
+- The adapter makes each key with `client.Keys.Key("cache", key)`. Example: the cache key `user:42` in namespace `profile` is `identity:cache:profile:user:42` for the key prefix `identity`. The ACL rule `~identity:*` covers it.
+- Commands: `GET`, `SET key value PX <ms>`, and `DEL`. `Set` rounds the TTL up to whole milliseconds.
+- `Delete` sends one `DEL` for each key in one `DoMulti` call. It works in standalone mode and in cluster mode, where the keys can be in different slots. `Delete` with no keys sends no command. If one or more `DEL` commands fail, it returns the errors joined.
+- The tests use a standalone Valkey. They do not use a Valkey cluster.
+
+## transaction
+
+Purpose: the transaction port. The adapter is in [`transaction/postgres`](#transactionpostgres).
+
+Import path: `github.com/techorionai/constellation-platform-go/transaction`
+
+Environment variables: None.
+
+Use:
+
+```go
+// A service uses the adapter of transaction/postgres. This sample uses the
+// mock, which follows the same rules for the hooks.
+var tx transaction.Transactor = &mock.Transactor{}
+ctx := context.Background()
+
+err := tx.WithinTx(ctx, func(ctx context.Context) error {
+	tx.AfterCommit(ctx, func(context.Context) { fmt.Println("after commit") })
+	fmt.Println("in transaction")
+	return nil
+}, transaction.Name("create_order"))
+fmt.Println(err)
+// Output:
+// in transaction
+// after commit
+// <nil>
+```
+
+Errors:
+
+- `ErrSerialization`: the database stopped the transaction because of a conflict. The caller can try again. The package does not retry.
+- `ErrNestedOptions`: a nested `WithinTx` call has `ReadOnly` or `Isolation`.
+- `ErrInvalidOption`: the name does not match `^[a-z][a-z0-9_]{0,63}$`, or the isolation level is not defined. `WithinTx` returns it before it starts the transaction and before it calls `fn`.
+- `ErrForeignTx`: the context has a transaction that the transaction adapter did not start.
+
+Rules and limits:
+
+- Options: `ReadOnly()`, `Isolation(level)`, and `Name(name)`. The levels are `ReadCommitted` (default), `RepeatableRead`, and `Serializable`. `Name` gives the transaction a name for the span and the metrics. The default is `unnamed`. The names are fixed in the code.
+- `Resolve(opts...)` checks the options and returns the settings. The adapter and `mock.Transactor` call it. `Settings.HasTxOptions()` tells if the options include `ReadOnly` or `Isolation`.
+- `WithinTx` commits if `fn` returns nil. It rolls back if `fn` returns an error or panics.
+- A nested `WithinTx` joins the outer transaction. It can set `Name` only. There are no savepoints, so an inner error that the outer function ignores does not roll back the inner work alone.
+- `AfterCommit` rules:
+  - The hooks run in the order of registration after the commit of the outermost transaction. They do not run if the transaction rolls back or the commit fails.
+  - A hook gets a context without the cancel of the caller, with a time limit. A hook must obey its context.
+  - A hook does not return an error. A panic in a hook is recovered and logged, and the next hooks still run.
+  - Outside a transaction, `AfterCommit` runs the hook at once.
+- The package must not import a database driver or `net/http`. The `depguard` rules enforce it.
+
+## transaction/postgres
+
+Purpose: the PostgreSQL adapter of `transaction.Transactor`.
+
+Import path: `github.com/techorionai/constellation-platform-go/transaction/postgres`
+
+Environment variables: None. The adapter uses the pool of [`clients/postgres`](#clientspostgres).
+
+Use:
+
+```go
+ctx := context.Background()
+
+var cfg struct {
+	Database clientpg.Config `envPrefix:"DATABASE__"`
+}
+if err := config.Load("IDENTITY_", &cfg); err != nil {
+	log.Fatal(err)
+}
+db, err := clientpg.New(ctx, cfg.Database)
+if err != nil {
+	log.Fatal(err)
+}
+defer db.Close()
+
+tx := txpg.NewTransactor(db.Pool)
+err = tx.WithinTx(ctx, func(ctx context.Context) error {
+	// A repository gets its connection with Conn for each call. It joins
+	// this transaction.
+	_, err := clientpg.Conn(ctx, db.Pool).Exec(ctx, "INSERT INTO items (id) VALUES ($1)", "i1")
+	if err != nil {
+		return err
+	}
+	tx.AfterCommit(ctx, func(context.Context) { log.Print("committed") })
+	return nil
+}, transaction.Name("create_item"))
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+Errors: the errors of `transaction`. SQLSTATE `40001` and `40P01` give an error that wraps `transaction.ErrSerialization` and the original error. If `fn` returns an error and the rollback also fails, `WithinTx` returns both errors joined.
+
+Rules and limits:
+
+- `NewTransactor(pool, opts...)`. `WithHookTimeout(d)` sets the time limit of each `AfterCommit` hook. The default is 5 seconds. A value of 0 or less causes a panic.
+- `WithinTx` starts a transaction with the options, calls `fn` with a context that has the transaction, and commits or rolls back. A panic in `fn` rolls back, then the same panic goes on.
+- If a hook does not end in the time limit, the adapter writes an `error` log record and goes on with the next hook. The goroutine of that hook ends later. `WithinTx` returns after all hooks end or reach the time limit.
+- The hook list is safe for concurrent use. Goroutines that `fn` starts can call `AfterCommit`.
+- The hook list closes when the outermost transaction ends. A call of `AfterCommit` after that drops the hook and writes an `error` log record.
+- Only the transaction adapter calls `clients/postgres.ContextWithTx`. If the context has a transaction but no hook list of the adapter, `AfterCommit` panics and `WithinTx` returns `ErrForeignTx`.
+- The adapter makes the span `db.transaction` with the attributes `db.transaction.name`, `db.transaction.isolation`, and `db.transaction.read_only`. The span has the `outcome` and no error text.
+- Metrics: see [conventions.md](conventions.md#metrics).
+
+## Full sample: a command with a transaction, the outbox, and a cache
+
+```go
+ctx := context.Background()
+var (
+	db *postgres.Client
+	kv *valkey.Client
+)
+
+repo := orderRepo{pool: db.Pool}
+tx := txpg.NewTransactor(db.Pool)
+orders := cache.New[order](cachevk.NewStore(kv), "order")
+
+rename := executor.Func[renameOrder](func(ctx context.Context, p renameOrder) error {
+	return tx.WithinTx(ctx, func(ctx context.Context) error {
+		if err := repo.rename(ctx, p.ID, p.Name); err != nil {
+			return err
+		}
+		if err := repo.writeOutbox(ctx, p.ID); err != nil {
+			return err
+		}
+		// Delete the cache entry after the commit. Then another request
+		// cannot store the old value again before the commit.
+		tx.AfterCommit(ctx, func(ctx context.Context) { _ = orders.Delete(ctx, p.ID) })
+		return nil
+	}, transaction.Name("rename_order"))
+})
+
+// Innermost first: the command, then logging, then tracing.
+var cmd executor.Executor[renameOrder] = rename
+cmd = decorators.ApplyLoggingNoResult(cmd, "RenameOrder")
+cmd = decorators.ApplyTracingNoResult(cmd, "RenameOrder")
+
+if err := cmd.Execute(ctx, renameOrder{ID: "o1", Name: "New name"}); err != nil {
+	log.Fatal(err)
+}
+
+// A read path uses GetOrLoad.
+o, err := orders.GetOrLoad(ctx, "o1", time.Minute, func(ctx context.Context) (order, error) {
+	var out order
+	err := postgres.Conn(ctx, db.Pool).QueryRow(ctx, `SELECT id, name FROM orders WHERE id = $1`, "o1").Scan(&out.ID, &out.Name)
+	return out, err
+})
+if err != nil {
+	log.Fatal(err)
+}
+log.Print(o.Name)
+```
+
+`orderRepo` is a repository adapter. Its methods get the connection with `postgres.Conn(ctx, r.pool)`. The sample is `Example_command` in `example_command_test.go`.
+
 ## resources/test/containers
 
 Purpose: start PostgreSQL and Valkey containers in tests.
@@ -720,7 +1064,7 @@ Rules and limits:
 
 ## resources/test/mock
 
-Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, and `health.Checker`.
+Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), and `transaction.Transactor` (`Transactor`).
 
 Import path: `github.com/techorionai/constellation-platform-go/resources/test/mock`
 
@@ -744,4 +1088,6 @@ Rules and limits:
 
 - A mock replaces a port only in a unit test. A server-side integration test uses a test container and a live dependency.
 - Each mock has a function field for each method (`LockFunc`, `UnlockFunc`, `UpFunc`, `CheckFunc`). If the field is nil, the mock succeeds. Each mock counts its calls (`LockCalls`, `UnlockCalls`, `UpCalls`, `CheckCalls`).
+- `CacheStore` keeps the values in a map and applies `cache.CheckKey`, `cache.CheckTTL`, and `cache.CheckValue`. It has the fields `GetFunc`, `SetFunc`, and `DeleteFunc`, the counts `GetCalls`, `SetCalls`, and `DeleteCalls`, and the helpers `Put`, `Value`, and `TTL`.
+- `Transactor` calls `transaction.Resolve`, then calls `fn` without a database transaction. It follows the rules of the adapter for nested calls and `AfterCommit` hooks: the outermost call runs the hooks after `fn` returns nil, and a nested call joins the hooks of the outer call. `BeforeFunc` can return an error before `fn`. `WithinTxCalls` and `CommitCalls` count the calls.
 - A mock imports the package of its port. A unit test that imports `resources/test/mock` is in the external test package (`<package>_test`).
