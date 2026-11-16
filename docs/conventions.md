@@ -132,7 +132,7 @@ Metric attributes never contain keys, values, or other unbounded data. The names
 | `constellation.db.transaction.nested` | Counter | `{call}` | `db.transaction.name` | `WithinTx` calls that joined an outer transaction. |
 
 - The hit ratio of the cache is `cache.requests{result="hit"}` divided by all `get` requests.
-- Values of `outcome` of `constellation.db.transaction.duration`: `commit`, `rollback` (`fn` returned an error), `panic`, `commit_error` (`fn` returned nil, but the commit failed), and `begin_error` (the transaction did not start).
+- Values of `outcome` of `constellation.db.transaction.duration`: `commit`, `rollback` (`fn` returned an error), `panic`, `goexit` (`fn` called `runtime.Goexit`), `commit_error` (`fn` returned nil, but the commit failed), and `begin_error` (the transaction did not start).
 - The transaction metrics start with `constellation.`, because the OpenTelemetry semantic conventions reserve the `db.` namespace and do not define these metrics. The span name `db.transaction` and the attribute names do not change.
 - Histogram boundaries. The default boundaries of the SDK (0 to 10000) suit milliseconds, not seconds or bytes, so each histogram sets its own:
 
