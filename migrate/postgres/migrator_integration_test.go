@@ -5,6 +5,7 @@ package postgres_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"net/url"
 	"strings"
@@ -96,6 +97,36 @@ func advisoryLocks(t *testing.T, conn *pgx.Conn) int {
 	t.Helper()
 	return queryInt(t, conn, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'
 		AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`)
+}
+
+// pollQuery waits until another session of the database runs a statement that
+// contains text. It gives up after 30 seconds.
+func pollQuery(ctx context.Context, conn *pgx.Conn, text string) error {
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var n int
+		err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND pid <> pg_backend_pid()
+			AND state = 'active' AND query LIKE '%' || $1 || '%'`, text).Scan(&n)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("no session runs a statement with %q", text)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// waitForQuery is pollQuery for the test goroutine. It fails the test on an error.
+func waitForQuery(t *testing.T, conn *pgx.Conn, text string) {
+	t.Helper()
+	if err := pollQuery(t.Context(), conn, text); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // holdLock takes the advisory lock of the migration set name on a test
@@ -382,7 +413,14 @@ func TestIntegrationMigrate(t *testing.T) {
 			"3_c.up.sql": "CREATE TABLE c (id int);",
 		}), "")
 		ctx, cancel := context.WithCancel(t.Context())
-		time.AfterFunc(500*time.Millisecond, cancel)
+		watch := connect(t, dbURL)
+		go func() {
+			// Cancel when migration 2 runs, not after a fixed time.
+			if err := pollQuery(t.Context(), watch, "pg_sleep(2)"); err != nil {
+				t.Error(err)
+			}
+			cancel()
+		}()
 		_, err := run(ctx, pool, m, "", 0)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v, want context.Canceled", err)
@@ -474,7 +512,8 @@ func TestIntegrationMigrate(t *testing.T) {
 			_, err := run(t.Context(), poolA, mA, "", 0)
 			errA <- err
 		}()
-		time.Sleep(500 * time.Millisecond)
+		// Wait until A holds the lock and runs migration 1.
+		waitForQuery(t, connect(t, dbURL), "pg_sleep(5)")
 
 		start := time.Now()
 		mB := newMigrator(t, poolB, fsys, "")
