@@ -25,6 +25,10 @@ go get github.com/techorionai/constellation-platform-go@vX.Y.Z
 | [`cache/valkey`](#cachevalkey) | Valkey adapter of the cache port. |
 | [`transaction`](#transaction) | Transaction port with `AfterCommit` hooks. |
 | [`transaction/postgres`](#transactionpostgres) | PostgreSQL adapter of the transaction port. |
+| [`secrets`](#secrets) | Envelope encryption and storage of secrets, with master key rotation. |
+| [`secrets/postgres`](#secretspostgres) | PostgreSQL adapter and migrations of the secrets store. |
+| [`retention`](#retention) | Background jobs that delete expired data. |
+| [`retention/postgres`](#retentionpostgres) | PostgreSQL table purger and advisory lock for retention jobs. |
 | [`resources/test/containers`](#resourcestestcontainers) | Start PostgreSQL and Valkey containers in tests. |
 | [`resources/test/mock`](#resourcestestmock) | Mocks of ports. |
 
@@ -975,6 +979,294 @@ Rules and limits:
 - The adapter makes the span `db.transaction` with the attributes `db.transaction.name`, `db.transaction.isolation`, and `db.transaction.read_only`. The span has the `outcome` and no error text.
 - Metrics: see [conventions.md](conventions.md#metrics).
 
+## secrets
+
+Purpose: store secret values (LLM API keys, SMTP credentials, webhook signing keys, OAuth client secrets) with envelope encryption. `Seal` and `Open` do the encryption. `Service` checks the names and the sizes and stores the envelopes through the `Repository` port. `KeyRing` holds the master keys.
+
+Import path: `github.com/techorionai/constellation-platform-go/secrets`
+
+Environment variables (with the prefix of the service and `SECRETS__`, for example `IDENTITY_SECRETS__MASTER_KEY`):
+
+| Variable | Required | Meaning |
+| -------- | -------- | ------- |
+| `MASTER_KEY` or `MASTER_KEY_FILE` | Yes | The current master key: 32 bytes, base64 (standard encoding). |
+| `MASTER_KEY_ID` | Yes | The ID of the current key. It matches `^[a-z0-9-]{1,32}$`. |
+| `PREVIOUS_KEYS` or `PREVIOUS_KEYS_FILE` | No | Keys for rotation. The format is `<id>:<base64>` items, separated by commas. |
+
+Make a master key:
+
+```sh
+openssl rand -base64 32
+```
+
+Use:
+
+```go
+ctx := context.Background()
+// A service uses the PostgreSQL repository of secrets/postgres. The mock
+// keeps the records in memory.
+svc := secrets.NewService(exampleRing(), &mock.SecretsRepository{})
+
+if err := svc.Put(ctx, "llm/api-key", []byte("value")); err != nil {
+	fmt.Println(err)
+	return
+}
+value, err := svc.Get(ctx, "llm/api-key")
+fmt.Println(string(value), err)
+
+names, err := svc.List(ctx, secrets.ListParams{})
+fmt.Println(names.Names, err)
+
+_, err = svc.Get(ctx, "missing")
+fmt.Println(err)
+// Output:
+// value <nil>
+// [llm/api-key] <nil>
+// secrets: not found
+```
+
+`exampleRing` is a helper of the example. A service makes the ring with `secrets.NewKeyRing(cfg.Secrets)`, where `cfg.Secrets` is a `secrets.Config` with the tag `envPrefix:"SECRETS__"`. The sample is `ExampleService` in `example_test.go`.
+
+Errors:
+
+- `ErrInvalidConfig` (from `NewKeyRing`): a key is not valid base64 or does not have 32 bytes, an ID does not match the rule, an ID is used two times, the current ID is in the list of previous keys, or a previous key item has no `:`. The text never contains a key.
+- `ErrInvalidName`, `ErrEmptyValue`, `ErrTooLarge`, `ErrInvalidLimit`, `ErrInvalidBatchSize`: the input is not valid.
+- `ErrNotFound`: no secret has the name.
+- `ErrDecrypt`: the authentication failed. The stored data is changed, copied from another row, or sealed with another key. `ErrUnknownKey`: the ring has no key with the key ID of the record. `ErrUnsupportedFormat`: the envelope format is not 1.
+- `ErrConflict` (from the repository): the stored envelope changed. `Rewrap` counts it and does not return it.
+
+Rules and limits:
+
+- A name matches `^[a-z0-9][a-z0-9._:/-]{0,199}$`. A value has 1 byte to 64 KiB. `List` gives names only, 100 by default and 1000 at most. It uses the last name of a page as the cursor.
+- No span, log record, metric attribute, or error contains a value or a key. A span has the attribute `secret.name`.
+- The data ciphertext binds to the name. A ciphertext that is copied to another row does not decrypt.
+- The calling service checks the permissions and writes the audit entries.
+- A backup holds the encrypted secrets and not the master key. A backup without the master key cannot be decrypted, and a lost master key makes all secrets lost. Keep the master key in a different place from the backup.
+- A random 96-bit nonce is safe for far more than the number of `Put` and `Rewrap` calls of a self-hosted install, because each secret has its own data key.
+
+Rotate the master key. A service can run more than one instance, and old and new instances run at the same time during a rolling restart. Thus the rotation uses three deployments:
+
+1. Add the new key `k2` to `PREVIOUS_KEYS` on all instances. `k1` stays current. All instances can now open `k2` envelopes. No instance writes with `k2`.
+2. Make `k2` current and move `k1` to `PREVIOUS_KEYS`. During the restart, old instances write with `k1` and new instances write with `k2`. Both can open both.
+3. Run `Service.Rewrap` until `Conflicts` and `Failed` are 0. Then delete `k1` from `PREVIOUS_KEYS`.
+
+`Rewrap(ctx, batchSize)` takes a `batchSize` from 1 to 1000 and returns `RewrapResult{Rewrapped, Conflicts, Failed}`. A record that changed during the rewrap counts in `Conflicts`. Run `Rewrap` again. A record that no key of the ring can open counts in `Failed`, and `Rewrap` writes an `error` log record with its name and the kind of the error. Examine each failed record, and do not delete the old key until `Failed` is 0. A service gives its own entry point for `Rewrap`. See [Admin sample](#admin-sample-rotation-and-a-manual-retention-run).
+
+## secrets/postgres
+
+Purpose: the PostgreSQL adapter of `secrets.Repository`, with its embedded migration for the table `platform_secrets`.
+
+Import path: `github.com/techorionai/constellation-platform-go/secrets/postgres`
+
+Environment variables: None.
+
+Use:
+
+```go
+ctx := context.Background()
+
+var cfg struct {
+	Database clientpg.Config `envPrefix:"DATABASE__"`
+	Secrets  secrets.Config  `envPrefix:"SECRETS__"`
+}
+if err := config.Load("IDENTITY_", &cfg); err != nil {
+	log.Fatal(err)
+}
+db, err := clientpg.New(ctx, cfg.Database)
+if err != nil {
+	log.Fatal(err)
+}
+defer db.Close()
+
+// Run the secrets migrations with their own migrations table. The pool
+// needs MaxConns of 2 or more.
+migrator, err := pgmigrate.NewMigrator(db.Pool, secretspg.Migrations(),
+	pgmigrate.MigratorOptions{MigrationsTable: secretspg.MigrationsTable})
+if err != nil {
+	log.Fatal(err)
+}
+_, err = migrate.Run(ctx, pgmigrate.NewLocker(db.Pool, secretspg.MigrationsTable), migrator,
+	migrate.Options{Name: secretspg.MigrationsTable})
+if err != nil {
+	log.Fatal(err)
+}
+
+ring, err := secrets.NewKeyRing(cfg.Secrets)
+if err != nil {
+	log.Fatal(err)
+}
+svc := secrets.NewService(ring, secretspg.NewRepository(db.Pool))
+if err := svc.Put(ctx, "llm/api-key", []byte("value")); err != nil {
+	log.Fatal(err)
+}
+```
+
+The sample is `ExampleNewRepository` in `example_test.go`.
+
+Errors:
+
+- The repository returns `secrets.ErrNotFound` for `Get` and `Delete` of an unknown name, and `secrets.ErrConflict` for `UpdateEnvelope` when the stored envelope is not the expected one. Other errors wrap the error of the driver. They contain no value, because the table holds ciphertext only.
+
+Rules and limits:
+
+- A service runs `migrate.Run` for its own migrations, and one more time for these migrations, with a separate `Migrator` and `Locker`. The lock name, the migrations table, and `Options.Name` are all `secretspg.MigrationsTable` (`platform_secrets_schema_migrations`). The two sets have different lock keys, and `migrate.duration` shows each set with `migrate.name`. The two sets do not share version numbers.
+- `Migrations()` returns the embedded files at the root, as `migrate/postgres.NewMigrator` needs.
+- The table has the columns `name` (primary key), `format`, `key_id`, `wrapped_dek`, `nonce`, `ciphertext`, `created_at`, and `updated_at`, and an index on `key_id`.
+- Each method gets its connection with `clients/postgres.Conn(ctx, pool)`. Thus `Service.Put` joins the transaction of the caller, if there is one.
+- `Upsert` replaces the envelope of an existing name and sets `updated_at`. `UpdateEnvelope` changes the row only if `key_id` and `wrapped_dek` are still the old values.
+- A later change to `platform_secrets` follows the expand and contract rule.
+
+## retention
+
+Purpose: delete expired data with background jobs. A `Job` has a name, a `Config`, a default period, and a `Purger`. The `Runner` runs each job in its own goroutine. A `Locker` makes sure that only one instance runs a job at a time.
+
+Import path: `github.com/techorionai/constellation-platform-go/retention`
+
+Environment variables: one set for each job. A service nests one `retention.Config` for each job with `envPrefix:"RETENTION__<JOB>__"`. `<JOB>` is the job name in upper case.
+
+| Variable | Default | Meaning |
+| -------- | ------- | ------- |
+| `<PREFIX>RETENTION__<JOB>__PERIOD` | None | The age after which data expires, for example `1440h`. Optional. |
+| `<PREFIX>RETENTION__<JOB>__INTERVAL` | `1h` | The time between the end of a tick and the start of the next tick. 1 minute or more. |
+| `<PREFIX>RETENTION__<JOB>__BATCH_SIZE` | `1000` | The maximum number of items that one `Purge` call deletes. From 1 to 100000. |
+
+Example: `IDENTITY_RETENTION__AUDIT__PERIOD=1440h`.
+
+Use:
+
+```go
+runner, err := retention.NewRunner(sampleLocker{}, []retention.Job{{
+	Name:          "audit",
+	Config:        retention.Config{Interval: time.Hour, BatchSize: 100},
+	DefaultPeriod: 60 * 24 * time.Hour,
+	Purger:        &samplePurger{left: 250},
+}}, retention.RunnerOptions{})
+if err != nil {
+	fmt.Println(err)
+	return
+}
+n, err := runner.RunOnce(context.Background(), "audit")
+fmt.Println(n, err)
+// Output: 250 <nil>
+```
+
+`sampleLocker` and `samplePurger` do no database work. A service uses the adapters of [retention/postgres](#retentionpostgres). The sample is `ExampleRunner_RunOnce` in `example_test.go`.
+
+To add a retention job: put a `retention.Config` in the config struct with the `envPrefix` of the job, set `DefaultPeriod` in code from `VISION.md` section 15, make a `Purger`, add a `Job` to the runner, and start `Run` after the migrations. The period of a job is `Config.Period` if it is more than 0. Else it is `DefaultPeriod`.
+
+Errors:
+
+- `NewRunner` returns `ErrInvalidJob` (wrong name, nil purger, or nil locker), `ErrInvalidConfig` (from `Config.Validate`), `ErrNoPeriod` (`Period` and `DefaultPeriod` are both 0, or `DefaultPeriod` is negative), and `ErrDuplicateJob`.
+- `RunOnce` returns `ErrUnknownJob` for an unknown name. It returns `0, ErrLocked` when another instance has the lock, so an admin tool can tell the operator that the job did not run. `0, nil` means that the job ran and found no expired items.
+
+Rules and limits:
+
+- `Validate` checks `Period >= 0`, `Interval >= 1m`, and `1 <= BatchSize <= 100000`. A `Config` made in code must set `Interval` and `BatchSize`. The defaults come from the environment tags.
+- `Run` starts one goroutine for each job and returns nil when the context ends. A job waits a random time from 0 to `Interval / 10`, runs its first tick, and then runs the next tick `Interval` after the end of the previous tick. The jobs are independent. A tick with an error does not stop `Run`. `Run` treats `ErrLocked` as a skipped tick and writes no `error` log record for it.
+- A tick takes the lock `retention:<name>`, calls `Purge` with `BatchSize` until it returns less than `BatchSize`, and releases the lock with a new context of 10 seconds, also after an error.
+- Each tick makes the span `retention.tick` and records the metrics `retention.deleted`, `retention.duration`, and `retention.last_success`. See [conventions.md](conventions.md#retention-metrics) for the outcome values and the alert rules. A normal stop gives the outcome `canceled` and an `info` log record, not an `error` outcome.
+- `RunnerOptions.Clock` and `RunnerOptions.After` are for tests. A test gives an `After` function that returns a channel that the test controls.
+
+## retention/postgres
+
+Purpose: the PostgreSQL adapters of the retention ports. `TablePurger` deletes the expired rows of one table in batches. `Locker` is a session advisory lock that does not wait.
+
+Import path: `github.com/techorionai/constellation-platform-go/retention/postgres`
+
+Environment variables: None.
+
+Use:
+
+```go
+ctx := context.Background()
+
+var cfg struct {
+	Database       clientpg.Config  `envPrefix:"DATABASE__"`
+	AuditRetention retention.Config `envPrefix:"RETENTION__AUDIT__"`
+}
+if err := config.Load("IDENTITY_", &cfg); err != nil {
+	log.Fatal(err)
+}
+// The pool needs MaxConns of 2 or more. Each tick of a job uses 2
+// connections, so leave spare connections for the jobs.
+db, err := clientpg.New(ctx, cfg.Database)
+if err != nil {
+	log.Fatal(err)
+}
+defer db.Close()
+
+purger, err := retpg.NewTablePurger(db.Pool, retpg.TableSpec{Table: "audit_entries", TimeColumn: "created_at"})
+if err != nil {
+	log.Fatal(err)
+}
+locker, err := retpg.NewLocker(db.Pool)
+if err != nil {
+	log.Fatal(err)
+}
+runner, err := retention.NewRunner(locker, []retention.Job{{
+	Name:          "audit",
+	Config:        cfg.AuditRetention,
+	DefaultPeriod: 60 * 24 * time.Hour,
+	Purger:        purger,
+}}, retention.RunnerOptions{})
+if err != nil {
+	log.Fatal(err)
+}
+// Run stops and returns when ctx ends.
+go func() { _ = runner.Run(ctx) }()
+```
+
+The sample is `ExampleNewTablePurger` in `example_test.go`.
+
+Errors:
+
+- `ErrPoolTooSmall` (from `NewLocker`): the pool has `MaxConns` below 2.
+- `NewTablePurger` returns an error if a name in `TableSpec` does not match `^[a-z_][a-z0-9_]{0,62}$`, and it runs no SQL.
+
+Rules and limits:
+
+- `TableSpec` has `Schema` (default `public`), `Table`, `TimeColumn`, and `KeyColumn` (default `id`). The adapter quotes the names with `pgx.Identifier`.
+- The statement is `DELETE FROM <t> WHERE <key> IN (SELECT <key> FROM <t> WHERE <col> < $1 ORDER BY <col> LIMIT $2) AND <col> < $1`. It uses a key column and not `ctid`, because a `ctid` is unique in one partition only. The statement works on normal tables and on partitioned tables. The outer time condition keeps the rows that are not expired, also when the key is unique only together with the partition key.
+- The time column has the type `timestamptz`. The key column is the primary key, or a part of the primary key of a partitioned table. Add an index on the time column.
+- A key column that is not unique can delete more rows in one batch than `BatchSize`. The outer time condition keeps all rows that are not expired.
+- `Locker` key: the 64-bit FNV-1a hash of `constellation:` plus the name. `TryLock` takes one connection and runs `pg_try_advisory_lock`. If another session has the lock, it releases the connection. The connection stays with the lock until `unlock`. This adapter does not import `migrate/postgres`. It has its own small lock code.
+- A tick uses two pool connections at the same time: the lock connection for the full tick, and one connection for each `Purge` call. N jobs whose ticks run at the same time can use 2N connections. Set `MaxConns` with spare connections for the jobs, in addition to the connections for requests.
+- The adapters use the pool directly. A retention tick is not part of a caller transaction.
+- A connection pooler such as PgBouncer in transaction mode breaks session advisory locks. Retention jobs need a direct connection or a pool in session mode.
+
+## Admin sample: rotation and a manual retention run
+
+```go
+ctx := context.Background()
+var (
+	svc    *secrets.Service
+	runner *retention.Runner
+)
+
+// Rotation, step 3: rewrap until Conflicts and Failed are 0.
+res, err := svc.Rewrap(ctx, 100)
+fmt.Printf("rewrapped=%d conflicts=%d failed=%d\n", res.Rewrapped, res.Conflicts, res.Failed)
+if err != nil {
+	log.Fatal(err)
+}
+if res.Conflicts > 0 || res.Failed > 0 {
+	fmt.Println("run the command again, and examine the failed records before you remove the old key")
+}
+
+// A manual run of one retention job.
+n, err := runner.RunOnce(ctx, "audit")
+switch {
+case errors.Is(err, retention.ErrLocked):
+	fmt.Println("another instance runs the job now, so this call did nothing")
+case err != nil:
+	log.Fatal(err)
+default:
+	fmt.Printf("deleted %d rows\n", n)
+}
+```
+
+The sample is `Example_admin` in `example_admin_test.go`. A service gives its own entry point for these calls, for example an admin subcommand.
+
 ## Full sample: a command with a transaction, the outbox, and a cache
 
 ```go
@@ -1068,7 +1360,7 @@ Rules and limits:
 
 ## resources/test/mock
 
-Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), and `transaction.Transactor` (`Transactor`).
+Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), `transaction.Transactor` (`Transactor`), `secrets.Repository` (`SecretsRepository`), `retention.Purger` (`RetentionPurger`), and `retention.Locker` (`RetentionLocker`).
 
 Import path: `github.com/techorionai/constellation-platform-go/resources/test/mock`
 
@@ -1094,4 +1386,6 @@ Rules and limits:
 - Each mock has a function field for each method (`LockFunc`, `UnlockFunc`, `UpFunc`, `CheckFunc`). If the field is nil, the mock succeeds. Each mock counts its calls (`LockCalls`, `UnlockCalls`, `UpCalls`, `CheckCalls`).
 - `CacheStore` keeps the values in a map and applies `cache.CheckKey`, `cache.CheckTTL`, and `cache.CheckValue`. It has the fields `GetFunc`, `SetFunc`, and `DeleteFunc`, the counts `GetCalls`, `SetCalls`, and `DeleteCalls`, and the helpers `Put`, `Value`, and `TTL`.
 - `Transactor` calls `transaction.Resolve`, then calls `fn` without a database transaction. It follows the rules of the adapter for nested calls and `AfterCommit` hooks: the outermost call runs the hooks after `fn` returns nil, and a nested call joins the hooks of the outer call. `BeforeFunc` can return an error before `fn`. `WithinTxCalls` and `CommitCalls` count the calls.
+- `SecretsRepository` keeps the records in a map and follows the rules of the PostgreSQL adapter. It has a function field for each method (`UpsertFunc`, `GetFunc`, `DeleteFunc`, `ListNamesFunc`, `ListForRewrapFunc`, `UpdateEnvelopeFunc`), call counters, the parameters of the list calls, and the helpers `Put` and `Record`.
+- `RetentionPurger` has `PurgeFunc`, `PurgeCalls`, and `PurgeParams`. `RetentionLocker` acquires the lock by default. `Busy` makes it return `acquired` false, and `TryLockFunc` replaces the method. It counts `TryLockCalls`, `UnlockCalls`, and `LockNames`.
 - A mock imports the package of its port. A unit test that imports `resources/test/mock` is in the external test package (`<package>_test`).

@@ -8,6 +8,8 @@ import (
 	"github.com/techorionai/constellation-platform-go/cache"
 	"github.com/techorionai/constellation-platform-go/migrate"
 	"github.com/techorionai/constellation-platform-go/resources/test/mock"
+	"github.com/techorionai/constellation-platform-go/retention"
+	"github.com/techorionai/constellation-platform-go/secrets"
 )
 
 func ExampleMigrator() {
@@ -39,4 +41,31 @@ func ExampleTransactor() {
 	// Output:
 	// after commit
 	// <nil> 1
+}
+
+func ExampleSecretsRepository() {
+	repo := &mock.SecretsRepository{}
+	repo.Put("a", secrets.Envelope{Format: secrets.FormatV1, KeyID: "k1"})
+	rec, ok := repo.Record("a")
+	fmt.Println(rec.Name, rec.Envelope.KeyID, ok, repo.UpsertCalls())
+	// Output: a k1 true 0
+}
+
+func ExampleRetentionPurger() {
+	purger := &mock.RetentionPurger{PurgeFunc: func(context.Context, retention.PurgeParams) (int, error) {
+		return 3, nil
+	}}
+	runner, err := retention.NewRunner(&mock.RetentionLocker{}, []retention.Job{{
+		Name:          "events",
+		Config:        retention.Config{Interval: time.Hour, BatchSize: 100},
+		DefaultPeriod: time.Hour,
+		Purger:        purger,
+	}}, retention.RunnerOptions{})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	n, err := runner.RunOnce(context.Background(), "events")
+	fmt.Println(n, err, purger.PurgeCalls())
+	// Output: 3 <nil> 1
 }

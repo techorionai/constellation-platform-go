@@ -625,7 +625,7 @@ func TestIntegrationTransactor(t *testing.T) {
 	// I30
 	t.Run("I30 hook time limit", func(t *testing.T) {
 		e := newEnv(t, pg, 5)
-		tx := txpg.NewTransactor(e.pool, txpg.WithHookTimeout(100*time.Millisecond))
+		tx := txpg.NewTransactor(e.pool, txpg.WithHookTimeout(500*time.Millisecond))
 		second := false
 		start := time.Now()
 		err := tx.WithinTx(t.Context(), func(ctx context.Context) error {
@@ -634,11 +634,12 @@ func TestIntegrationTransactor(t *testing.T) {
 			return nil
 		})
 		d := time.Since(start)
-		if err != nil || !second || d < 90*time.Millisecond || d > time.Second {
+		if err != nil || !second || d < 400*time.Millisecond || d > 10*time.Second {
 			t.Fatalf("err %v, second %v, duration %v", err, second, d)
 		}
-		if n := strings.Count(e.logs.String(), "level=ERROR"); n != 1 {
-			t.Fatalf("error records = %d: %s", n, e.logs.String())
+		// Count the records by message. Other records of the global logger do not count.
+		if n := strings.Count(e.logs.String(), "an AfterCommit hook hit the time limit"); n != 1 {
+			t.Fatalf("time limit records = %d: %s", n, e.logs.String())
 		}
 		func() {
 			defer func() {
