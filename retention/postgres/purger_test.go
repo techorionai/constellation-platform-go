@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"strings"
 	"testing"
 
 	retpg "github.com/techorionai/constellation-platform-go/retention/postgres"
@@ -24,5 +25,23 @@ func TestNewTablePurgerRejectsBadNames(t *testing.T) {
 				t.Fatal("no error")
 			}
 		})
+	}
+}
+
+// R4: with more than one bad name, the error names the first bad field in the
+// fixed order schema, table, time column, key column.
+func TestNewTablePurgerErrorOrder(t *testing.T) {
+	spec := retpg.TableSpec{Schema: "bad schema", Table: "bad table", TimeColumn: "Bad", KeyColumn: "bad key"}
+	want := "retention: the schema name must match "
+	for range 50 {
+		_, err := retpg.NewTablePurger(nil, spec)
+		if err == nil || !strings.HasPrefix(err.Error(), want) {
+			t.Fatalf("error = %v, want prefix %q", err, want)
+		}
+	}
+	spec.Schema = ""
+	_, err := retpg.NewTablePurger(nil, spec)
+	if err == nil || !strings.HasPrefix(err.Error(), "retention: the table name must match ") {
+		t.Fatalf("error = %v, want the table name error", err)
 	}
 }

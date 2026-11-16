@@ -48,11 +48,12 @@ func NewTablePurger(pool *pgxpool.Pool, spec TableSpec) (*TablePurger, error) {
 	if spec.KeyColumn == "" {
 		spec.KeyColumn = "id"
 	}
-	for field, v := range map[string]string{
-		"schema": spec.Schema, "table": spec.Table, "time column": spec.TimeColumn, "key column": spec.KeyColumn,
+	// A slice gives a fixed check order, so the error text is the same each run.
+	for _, f := range []struct{ field, value string }{
+		{"schema", spec.Schema}, {"table", spec.Table}, {"time column", spec.TimeColumn}, {"key column", spec.KeyColumn},
 	} {
-		if !identPattern.MatchString(v) {
-			return nil, fmt.Errorf("retention: the %s name must match %s", field, identPattern)
+		if !identPattern.MatchString(f.value) {
+			return nil, fmt.Errorf("retention: the %s name must match %s", f.field, identPattern)
 		}
 	}
 	if pool == nil {
