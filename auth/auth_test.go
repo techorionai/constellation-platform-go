@@ -454,3 +454,27 @@ func TestLogFieldsBehindMiddleware(t *testing.T) {
 		t.Errorf("request.id missing: %v", rec)
 	}
 }
+
+// Issue 13 U5
+func TestRequireScopesIdentityAdmin(t *testing.T) {
+	withScopes := func(scopes ...string) *mock.Verifier {
+		return &mock.Verifier{VerifyFunc: func(context.Context, string) (auth.Principal, error) {
+			p := testPrincipal
+			p.Scopes = scopes
+			return p, nil
+		}}
+	}
+	ok := newEnv(t, withScopes("identity:admin"), "identity:admin")
+	if rec := ok.do("Bearer tok"); rec.Code != 204 {
+		t.Errorf("admin request got %d", rec.Code)
+	}
+	denied := newEnv(t, withScopes("identity:client:write"), "identity:admin")
+	rec := denied.do("Bearer tok")
+	p := decode(t, rec)
+	if rec.Code != 403 || p.Code != "insufficient_scope" {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body)
+	}
+	if len(p.MissingScopes) != 1 || p.MissingScopes[0] != "identity:admin" {
+		t.Errorf("missingScopes %v", p.MissingScopes)
+	}
+}

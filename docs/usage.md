@@ -1425,7 +1425,7 @@ Errors: `New` returns an error that names the variable in each of these cases: `
 
 Rules and limits:
 
-- The checks run in this order: compact JWS, `alg` is `ES256` (all other values, also `none`, fail), `typ` is `at+jwt` or `application/at+jwt` (case-insensitive), `kid` is in the key set, signature, `iss`, `aud` (a string or an array), `exp` (required, with `Leeway`), `nbf` and `iat` (with `Leeway`), `sub`, `client_id`, and `principal_type`, each `scope` key matches the `PermissionKey` pattern, and `act`.
+- The checks run in this order: compact JWS, `alg` is `ES256` (all other values, also `none`, fail), `typ` is `at+jwt` or `application/at+jwt` (case-insensitive), `kid` is in the key set, signature, `iss`, `aud` (a string or an array), `exp` (required, with `Leeway`), `nbf` and `iat` (with `Leeway`), `sub`, `client_id`, and `principal_type`, each `scope` key matches the `PermissionKey` pattern or is `identity:admin` (the one key with two segments), and `act`.
 - A key set accepts a key only if `kty` is `EC`, `crv` is `P-256`, `use` is `sig` or absent, `alg` is `ES256` or absent, `kid` is set, and the key has no private part. Other keys are ignored. A key set with no accepted key is a failed fetch.
 - The first `Verify` fetches the JWKS. A service starts when identity is down. Until a fetch works, `Verify` returns `ErrKeysUnavailable`.
 - A refresh replaces the full key set. A key that the issuer removed stops working after the next refresh.

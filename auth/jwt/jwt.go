@@ -25,7 +25,12 @@ var _ auth.Verifier = (*Verifier)(nil)
 
 const scopeName = "github.com/techorionai/constellation-platform-go/auth/jwt"
 
-// permissionKey is the pattern of PermissionKey in constellation-contracts.
+// adminScope is the one permission key with two segments that
+// constellation-contracts allows.
+const adminScope = "identity:admin"
+
+// permissionKey is the pattern of PermissionKey in constellation-contracts
+// for keys with three segments.
 var permissionKey = regexp.MustCompile(`^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$`)
 
 const (
@@ -454,8 +459,8 @@ func audienceMatches(aud json.RawMessage, want string) bool {
 	return false
 }
 
-// parseScopes splits the scope claim. Each key must match the permission key
-// pattern. An empty claim gives no scopes.
+// parseScopes splits the scope claim. Each key must be identity:admin or match
+// the permission key pattern. An empty claim gives no scopes.
 func parseScopes(scope string) ([]string, bool) {
 	if scope == "" {
 		return nil, true
@@ -465,7 +470,7 @@ func parseScopes(scope string) ([]string, bool) {
 	}
 	keys := strings.Split(scope, " ")
 	for _, k := range keys {
-		if len(k) > maxPermissionKeyLen || !permissionKey.MatchString(k) {
+		if len(k) > maxPermissionKeyLen || (k != adminScope && !permissionKey.MatchString(k)) {
 			return nil, false
 		}
 	}
