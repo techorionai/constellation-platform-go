@@ -177,7 +177,7 @@ Values of `outcome` of `retention.duration`:
 
 | Metric | Type | Unit | Attributes | Meaning |
 | ------ | ---- | ---- | ---------- | ------- |
-| `constellation.manifest.publish` | Counter | `{attempt}` | `outcome` (`ok`, `invalid`, `denied`, `unavailable`) | One count for each publish attempt of the `manifest` publisher. An alert on `denied` shows a wrong client config. An alert on `invalid` shows a wrong manifest. |
+| `constellation.manifest.publish` | Counter | `{attempt}` | `outcome` (`ok`, `invalid`, `rejected`, `denied`, `unavailable`) | One count for each publish attempt of the `manifest` publisher. An alert on `denied` shows a wrong client config. An alert on `invalid` shows a wrong manifest. An alert on `rejected` shows a fixed 4xx refusal of the registry. |
 
 An alert on a high rate of `keys_unavailable` or of `network_error` shows that the service cannot reach the identity service. An alert on a high rate of `wrong_audience` can show a client that calls the wrong service.
 

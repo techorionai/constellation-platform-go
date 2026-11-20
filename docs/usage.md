@@ -1453,7 +1453,8 @@ Environment variables (nest `clientcred.Config` with `envPrefix:"CLIENT__"`):
 | `PrivateKey` | `CLIENT__PRIVATE_KEY` or `CLIENT__PRIVATE_KEY_FILE` | none | Required. PEM EC P-256 private key (PKCS #8 or SEC 1). |
 | `Issuer` | `CLIENT__ISSUER` | none | Required. The issuer URL of the identity service. It is the `aud` of the assertion. |
 | `TokenURL` | `CLIENT__TOKEN_URL` | `<Issuer>/oauth/token` | The URL that the service calls. In Compose it is the internal URL. |
-| `HTTPTimeout` | `CLIENT__HTTP_TIMEOUT` | `10s` | More than 0. |
+| `HTTPTimeout` | `CLIENT__HTTP_TIMEOUT` | `10s` | More than 0. A value of 0 or less is an error. |
+| `AllowInsecureHTTP` | `CLIENT__ALLOW_INSECURE_HTTP` | `false` | Optional. Allows the scheme `http` for `Issuer` and `TokenURL`. Use it only for local Compose and tests. Never set it in production. |
 
 `Issuer` and `TokenURL` have different jobs. `Issuer` is the name of the identity service. The identity service accepts only its own issuer URL as the `aud` of an assertion. `TokenURL` is the network address that the service calls. In Compose, `Issuer` can be `http://localhost:8080` and `TokenURL` can be `http://identity:8080/oauth/token`.
 
@@ -1464,21 +1465,21 @@ src, err := clientcred.New(cfg.Client)
 token, err := src.Token(ctx, "identity", "identity:manifest:publish")
 ```
 
-Errors: `auth.ErrNoScopes`, `auth.ErrBadTokenResponse`, `auth.ErrTokenUnavailable`, and `*auth.OAuthError`.
+Errors: `auth.ErrNoScopes`, `auth.ErrBadTokenResponse`, `auth.ErrTokenUnavailable`, and `*auth.OAuthError`. `New` returns an error that names the field and the variable if `Issuer` or `TokenURL` (after the default) does not use `https` and `AllowInsecureHTTP` is `false`. A URL that is not an `http` or `https` URL is always an error.
 
 Rules and limits:
 
 - `Token` needs at least one scope. The identity service rejects a request with no scope.
-- The cache key is the audience and the sorted scope list. The source uses a cached token until 80 percent of its lifetime passes.
+- The cache key is the audience and the sorted scope list. The source uses a cached token until 80 percent of its lifetime passes. After that time, the source tries to get a new token. If this refresh fails and the cached token has not expired, `Token` returns the cached token and no error. After the expiry, `Token` returns the error of the refresh. The next call tries again.
 - Each request signs a new assertion with a new `jti`, also a retry by the caller. The assertion has the header `alg=ES256`, `kid`, `typ=JWT`, and the claims `iss`, `sub` (the client ID), `aud` (`Issuer`), `jti`, `iat`, and `exp` (60 seconds).
 - Concurrent calls for one key share one request.
-- The response body has a limit of 64 KiB. A 200 response with no `access_token`, or with an `expires_in` that is missing, 0, or negative, gives `auth.ErrBadTokenResponse`. Nothing goes in the cache.
+- The response body has a limit of 64 KiB. A 200 response with no `access_token`, or with an `expires_in` that is missing, 0, negative, or more than 24 hours, gives `auth.ErrBadTokenResponse`. Nothing goes in the cache.
 - A 5xx response, the OAuth error `temporarily_unavailable`, and a network error give `auth.ErrTokenUnavailable`. `Token` does not retry. The caller decides.
 - Another OAuth error gives `*auth.OAuthError` with the `error` code.
 - The request does not follow redirects.
 - The code never logs or records the private key, the assertion, or a token.
 - Span `auth.clientcred.token` with the attributes `constellation.client.id` and `constellation.token.audience`. Metric `constellation.auth.token.request` (counter, unit `{request}`) has the attribute `outcome` with the values `ok`, `oauth_error`, `unavailable`, `bad_response`, and `network_error`. A cache hit makes no request and is not counted.
-- This adapter does not check the scheme of `Issuer` and `TokenURL`. In production, use `https`.
+- The source requires `https` for `Issuer` and `TokenURL` unless `AllowInsecureHTTP` is `true`. The assertion and the token go in clear text over `http`.
 
 ## clients/identity
 
@@ -1491,7 +1492,8 @@ Environment variables (nest `identity.Config` with `envPrefix:"IDENTITY__"`):
 | Field | Variable | Default | Rule |
 | ----- | -------- | ------- | ---- |
 | `URL` | `IDENTITY__URL` | none | Required. The base URL of the identity service. |
-| `Timeout` | `IDENTITY__TIMEOUT` | `10s` | More than 0. |
+| `Timeout` | `IDENTITY__TIMEOUT` | `10s` | More than 0. A value of 0 or less is an error. |
+| `AllowInsecureHTTP` | `IDENTITY__ALLOW_INSECURE_HTTP` | `false` | Optional. Allows the scheme `http` for `URL`. Use it only for local Compose and tests. Never set it in production. |
 
 Use:
 
@@ -1500,14 +1502,15 @@ c, err := identity.New(cfg.Identity, tokenSource, []string{"identity:manifest:pu
 registry := identity.NewManifestRegistry(c)
 ```
 
-Errors: `New` returns an error for a missing or wrong `URL`, a nil token source, and no scopes. `ManifestRegistry.Publish` maps the result:
+Errors: `New` returns an error for a missing or wrong `URL`, a `URL` with the scheme `http` when `AllowInsecureHTTP` is `false`, a nil token source, and no scopes. The error names the field and the variable. `ManifestRegistry.Publish` maps the result:
 
 | Result | Error |
 | ------ | ----- |
 | 200 | `nil` |
 | 422 | `*manifest.InvalidError` with the `Problem` codes and fields |
 | 401 or 403 | `manifest.ErrDenied` |
-| 5xx, network error, `auth.ErrTokenUnavailable` from the token source | `manifest.ErrUnavailable` |
+| 408, 429, 5xx, network error, `auth.ErrTokenUnavailable` from the token source | `manifest.ErrUnavailable` |
+| Other 4xx, for example 400, 404, and 409 | `manifest.ErrRejected` |
 | OAuth error `invalid_client`, `invalid_scope`, or `unauthorized_client` from the token source | `manifest.ErrDenied` |
 | Other | `manifest.ErrUnavailable` |
 
@@ -1517,6 +1520,7 @@ Rules and limits:
 - The generated HTTP client type is `APIClient`, because the schema `Client` (an OAuth client) uses the name `Client`. Use `ClientWithResponses` in your code.
 - The caller gives the scopes. The client asks for the audience `identity`. The package imports the port `auth.TokenSource`, not the adapter `auth/clientcred`.
 - The client does not follow redirects, because a redirect target must not get the token.
+- The client reads a response body of 1 MiB at most. A larger body gives the error `identity.ErrResponseTooLarge`, which `ManifestRegistry.Publish` maps to `manifest.ErrUnavailable`.
 
 To update the generated client after a contracts release:
 
@@ -1544,14 +1548,17 @@ go func() { _ = publisher.Run(ctx) }()
 
 Place in the startup order: load the manifest and make the publisher before step 4. Give `publisher.Checker()` to `health.NewState` in step 4. Start `publisher.Run(ctx)` in a goroutine in step 6 and do not wait for it. `MarkStarted` does not wait for identity.
 
-Errors of `Registry.Publish`: `*manifest.InvalidError`, `manifest.ErrDenied`, and `manifest.ErrUnavailable`. `Run` acts on each result:
+`NewPublisher` checks the manifest with `PermissionManifest.Validate`. If the manifest is not valid, `Run` sends no request and returns the error. The checker stays "not ready".
+
+Errors of `Registry.Publish`: `*manifest.InvalidError`, `manifest.ErrDenied`, `manifest.ErrRejected`, and `manifest.ErrUnavailable`. `ErrRejected` is a permanent error: the registry refused the request with a fixed 4xx status that a retry cannot fix. `Run` acts on each result:
 
 | Result | Action | Log | Metric `outcome` |
 | ------ | ------ | --- | ---------------- |
-| Success | Stop. The checker reports "ready". | `info` | `ok` |
+| Success | Stop. The checker reports "ready". | `info` with the app, the number of permissions, and the number of roles | `ok` |
 | `*InvalidError` | Stop with no retry, because the manifest is wrong. `Run` returns the error. The checker stays "not ready". | `error` with the `Problem` codes | `invalid` |
-| `ErrDenied` | Retry with backoff. An operator can fix the client config without a restart. | `error` on each attempt | `denied` |
-| `ErrUnavailable` or another error | Retry with backoff | `warn` on each attempt | `unavailable` |
+| `ErrRejected` | Stop with no retry, because a retry gives the same result. `Run` returns the error. The checker stays "not ready". | `error` with the error text | `rejected` |
+| `ErrDenied` | Retry with backoff. An operator can fix the client config without a restart. | `error` on each attempt, with the error and the wait | `denied` |
+| `ErrUnavailable` or another error | Retry with backoff | `warn` on each attempt, with the error and the wait | `unavailable` |
 | `ctx` ends | Return `ctx.Err()` | none | none |
 
 Rules and limits:
