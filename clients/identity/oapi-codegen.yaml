@@ -1,0 +1,9 @@
+package: identity
+generate:
+  client: true
+  models: true
+output: identity.gen.go
+output-options:
+  # The schema Client (an OAuth client) uses the name Client. The generated HTTP
+  # client has another name.
+  client-type-name: APIClient
