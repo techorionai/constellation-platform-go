@@ -538,3 +538,37 @@ func TestCloseTwice(t *testing.T) {
 	tr.CloseIdleConnections()
 	f.iss.Close()
 }
+
+// Issue 13 U1 and U2
+func TestIdentityAdminScope(t *testing.T) {
+	f := newFixture(t)
+	p := f.mustVerify(t, issuer.Claims{Scope: "identity:admin"})
+	if len(p.Scopes) != 1 || p.Scopes[0] != "identity:admin" {
+		t.Errorf("scopes %v", p.Scopes)
+	}
+	p = f.mustVerify(t, issuer.Claims{Scope: "identity:admin identity:client:write"})
+	if len(p.Scopes) != 2 || p.Scopes[0] != "identity:admin" || p.Scopes[1] != "identity:client:write" {
+		t.Errorf("scopes %v", p.Scopes)
+	}
+}
+
+// Issue 13 U3 and U4
+func TestBadTwoSegmentScope(t *testing.T) {
+	f := newFixture(t)
+	for _, s := range []string{
+		"identity:user", "Identity:admin", "identity:Admin",
+		"identity:admin ", "demo:admin", "identity:", ":admin", "openid",
+	} {
+		_, err := f.verify(t, issuer.Claims{Scope: s})
+		wantErr(t, err, auth.ErrInvalidToken)
+	}
+}
+
+// A key with three segments stays valid.
+func TestIdentityAdminReadStaysValid(t *testing.T) {
+	f := newFixture(t)
+	p := f.mustVerify(t, issuer.Claims{Scope: "identity:admin:read"})
+	if len(p.Scopes) != 1 || p.Scopes[0] != "identity:admin:read" {
+		t.Errorf("scopes %v", p.Scopes)
+	}
+}
