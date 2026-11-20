@@ -29,7 +29,11 @@ go get github.com/techorionai/constellation-platform-go@vX.Y.Z
 | [`secrets/postgres`](#secretspostgres) | PostgreSQL adapter and migrations of the secrets store. |
 | [`retention`](#retention) | Background jobs that delete expired data. |
 | [`retention/postgres`](#retentionpostgres) | PostgreSQL table purger and advisory lock for retention jobs. |
+| [`requestid`](#requestid) | Request ID middleware. |
+| [`auth`](#auth) | Principal, token verifier port, scope checks, and HTTP middleware. |
+| [`auth/jwt`](#authjwt) | JWKS token verifier for RFC 9068 access tokens. |
 | [`resources/test/containers`](#resourcestestcontainers) | Start PostgreSQL and Valkey containers in tests. |
+| [`resources/test/issuer`](#resourcestestissuer) | Test token issuer with a JWKS endpoint. |
 | [`resources/test/mock`](#resourcestestmock) | Mocks of ports. |
 
 Each sample in this file is a copy of an `Example` function of the package. The `example_test.go` files compile these samples.
@@ -80,6 +84,7 @@ var cfg struct {
 	Database postgres.Config `envPrefix:"DATABASE__"`
 	Valkey   valkey.Config   `envPrefix:"VALKEY__"`
 	Admin    health.Config   `envPrefix:"ADMIN__"`
+	Auth     authjwt.Config  `envPrefix:"AUTH__"`
 }
 // 1. Load the config.
 if err := config.Load("IDENTITY_", &cfg); err != nil {
@@ -129,13 +134,32 @@ if _, err := migrate.Run(ctx, migratepg.NewLocker(db.Pool, ""), migrator, migrat
 	log.Fatal(err)
 }
 
-// 6. Start the background jobs and the API server.
+// 6. Start the background jobs and the API server. The verifier fetches the
+// JWKS on the first request, so the service starts when identity is down.
+verifier, err := authjwt.New(cfg.Auth)
+if err != nil {
+	log.Fatal(err)
+}
+verifier.Start(ctx)
+mux := http.NewServeMux()
+// Protect each route: auth.RequireScopes("demo:ticket:read")(handler)
+api := &http.Server{
+	Addr:              ":8080",
+	Handler:           requestid.Middleware()(auth.Middleware(verifier)(mux)),
+	ReadHeaderTimeout: 5 * time.Second,
+}
+go func() {
+	if err := api.ListenAndServe(); err != nil {
+		log.Print(err)
+	}
+}()
 // 7. Tell the state that the service is ready.
 state.MarkStarted()
 
 // 8. On a stop signal, do these steps in this order:
-_ = admin.Drain(ctx) // the load balancer sees 503 during DrainDelay
-// Stop the API server and the jobs.
+_ = admin.Drain(ctx)  // the load balancer sees 503 during DrainDelay
+_ = api.Shutdown(ctx) // stop the API server
+verifier.Close()      // stop the JWKS refresh and the other jobs
 pgCheck.Close()
 kv.Close()
 db.Close()
@@ -1234,6 +1258,135 @@ Rules and limits:
 - The adapters use the pool directly. A retention tick is not part of a caller transaction.
 - A connection pooler such as PgBouncer in transaction mode breaks session advisory locks. Retention jobs need a direct connection or a pool in session mode.
 
+## requestid
+
+Purpose: give a request ID to each HTTP request, and put it on the response, the span, and the log records.
+
+Import path: `github.com/techorionai/constellation-platform-go/requestid`
+
+Environment variables: None.
+
+Use:
+
+```go
+handler := requestid.Middleware()(mux)
+```
+
+In a handler, `requestid.FromContext(ctx)` returns the ID.
+
+Errors: None.
+
+Rules and limits:
+
+- The middleware keeps the header `X-Request-ID` of the request if it matches `^[A-Za-z0-9._-]{1,128}$`. Otherwise it makes a new UUID v7.
+- The ID goes in the context, in the response header `X-Request-ID`, on the active span as `http.request.id`, and on the log records as `request.id`.
+- A log record gets `request.id` only if the code writes it with the request context, for example with `slog.InfoContext(ctx, ...)`. The log handler of `telemetry` adds the fields. See `telemetry.ContextWithAttrs`.
+- The request ID is not a security value. A client can send any ID that matches the pattern. Do not use it for an access decision.
+- Put this middleware first, so that the error bodies of `auth` have the `requestId`.
+
+## auth
+
+Purpose: the principal model, the token verification port, the scope checks, and the `net/http` middleware. The package is a port. The adapter is `auth/jwt`.
+
+Import path: `github.com/techorionai/constellation-platform-go/auth`
+
+Environment variables: None. See `auth/jwt` for the verifier settings.
+
+Use. The order of the middleware is `requestid`, then `auth.Middleware`, then `auth.RequireScopes` for each route:
+
+```go
+var verifier auth.Verifier // for example the verifier of auth/jwt
+
+read := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	p, _ := auth.PrincipalFromContext(r.Context())
+	_, _ = fmt.Fprintf(w, "hello %s", p.ID)
+})
+mux := http.NewServeMux()
+mux.Handle("GET /tickets", auth.RequireScopes("demo:ticket:read")(read))
+handler := requestid.Middleware()(auth.Middleware(verifier)(mux))
+```
+
+Types:
+
+- `Principal` has `ID`, `Type` (`user`, `agent`, `service`, or `workflow`), `ClientID`, `Scopes`, `Audience`, and `Act` (the acting principal, or nil).
+- `Verifier` is the port: `Verify(ctx, token) (Principal, error)`.
+- `Principal.HasScopes` and `Principal.MissingScopes` check the scopes.
+
+Errors. `Verify` wraps one of these errors, so `errors.Is` works. The middleware maps them to an HTTP response. The body is `application/problem+json` with the fields `type`, `title`, `status`, `code`, `requestId`, and `traceId` (if a span is active). `detail` never contains the error text of `Verify`.
+
+| Error | HTTP status | `WWW-Authenticate` | Problem `code` | Problem `title` | Metric `outcome` |
+| ----- | ----------- | ------------------ | -------------- | --------------- | ---------------- |
+| `ErrNoToken` | 401 | `Bearer` | `unauthorized` | `Authentication required` | `no_token` |
+| `ErrInvalidToken` | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `invalid` |
+| `ErrExpired` | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `expired` |
+| `ErrWrongIssuer` | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `wrong_issuer` |
+| `ErrWrongAudience` | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `wrong_audience` |
+| `ErrKeysUnavailable` | 503, `Retry-After: 5` | none | `auth_unavailable` | `Authentication unavailable` | `keys_unavailable` |
+| Other error | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `invalid` |
+| Missing scope (from `RequireScopes`) | 403 | `Bearer error="insufficient_scope", scope="..."` | `insufficient_scope` | `Missing scopes` | Not counted |
+
+A 403 body also has `missingScopes`, the list of the scopes that the principal lacks.
+
+Rules and limits:
+
+- The scheme `Bearer` is case-insensitive. A request with no header, another scheme, or an empty token gets `ErrNoToken`.
+- The middleware counts each verification in the metric `constellation.auth.verify`. The adapter does not count it, so one request is one count.
+- On success, the span gets `enduser.id`, `constellation.principal.type`, and `constellation.client.id`. The log records get `principal.id`, `principal.type`, and `client.id`.
+- `RequireScopes` fails closed. If the context has no principal (the chain has no `auth.Middleware`), it returns a 500 problem with the code `auth_not_configured`, writes one `error` log record, and does not call the next handler.
+- The token is never in a log record, a span, a metric, or an error body.
+- The principal comes only from the verified token. Never read it from a header or from baggage.
+- Each service checks the audience and the scopes of each request.
+
+## auth/jwt
+
+Purpose: the adapter of `auth.Verifier` for RFC 9068 access tokens. It verifies the tokens locally with the JWKS of the identity service.
+
+Import path: `github.com/techorionai/constellation-platform-go/auth/jwt`
+
+Environment variables: nest `jwt.Config` with `envPrefix:"AUTH__"`.
+
+| Name | Type | Default | Use |
+| ---- | ---- | ------- | --- |
+| `<PREFIX>AUTH__ISSUER` | string | none | Required. The `iss` claim that the verifier requires. |
+| `<PREFIX>AUTH__AUDIENCE` | string | none | Required. The `AppKey` of this service. The `aud` claim must contain it. |
+| `<PREFIX>AUTH__JWKS_URL` | string | `<Issuer>/.well-known/jwks.json` | Optional. |
+| `<PREFIX>AUTH__REFRESH_INTERVAL` | duration | `10m` | Optional. The time between the background refreshes. |
+| `<PREFIX>AUTH__MIN_REFETCH_INTERVAL` | duration | `30s` | Optional. The shortest time between two fetches that an unknown key ID starts. |
+| `<PREFIX>AUTH__LEEWAY` | duration | `30s` | Optional. The clock skew that the time claims allow. |
+| `<PREFIX>AUTH__HTTP_TIMEOUT` | duration | `5s` | Optional. The time limit of one JWKS fetch. |
+
+Use:
+
+```go
+var cfg struct {
+	Auth jwt.Config `envPrefix:"AUTH__"`
+}
+if err := config.Load("DEMO_", &cfg); err != nil {
+	log.Fatal(err)
+}
+verifier, err := jwt.New(cfg.Auth)
+if err != nil {
+	log.Fatal(err)
+}
+verifier.Start(ctx) // optional background refresh
+defer verifier.Close()
+handler := auth.Middleware(verifier)(mux)
+```
+
+Errors: `New` returns an error that names the missing variable. `Verify` returns the errors of the `auth` section.
+
+Rules and limits:
+
+- The checks run in this order: compact JWS, `alg` is `ES256` (all other values, also `none`, fail), `typ` is `at+jwt` or `application/at+jwt` (case-insensitive), `kid` is in the key set, signature, `iss`, `aud` (a string or an array), `exp` (required, with `Leeway`), `nbf` and `iat` (with `Leeway`), `sub`, `client_id`, and `principal_type`, each `scope` key matches the `PermissionKey` pattern, and `act`.
+- A key set accepts a key only if `kty` is `EC`, `crv` is `P-256`, `use` is `sig` or absent, `alg` is `ES256` or absent, `kid` is set, and the key has no private part. Other keys are ignored. A key set with no accepted key is a failed fetch.
+- The first `Verify` fetches the JWKS. A service starts when identity is down. Until a fetch works, `Verify` returns `ErrKeysUnavailable`.
+- A refresh replaces the full key set. A key that the issuer removed stops working after the next refresh.
+- A failed fetch keeps the old keys. A fetch fails on a status other than 200, on a body that is not valid JSON, on a body larger than 64 KiB, and on a key set with no accepted key.
+- A token with an unknown `kid` starts one refetch, at most once in `MinRefetchInterval`. Concurrent calls share one fetch.
+- `Start` is optional. Without it, the cache refreshes only when a token has an unknown `kid`. `Close` stops the refresh and waits for it. A second `Close` does nothing. `Verify` after `Close` still uses the cached keys.
+- Metric `constellation.auth.jwks.fetch` (counter, unit `{fetch}`) has the attribute `outcome` with the values `ok`, `http_error`, `bad_body`, `too_large`, `no_keys`, and `network_error`.
+- Opaque API tokens, introspection, and revocation are not part of this package.
+
 ## Admin sample: rotation and a manual retention run
 
 ```go
@@ -1358,9 +1511,45 @@ Rules and limits:
 - `Stop(ctx)` stops a container before the cleanup.
 - `AdminURL()`, `Exec`, `Admin(t)`, and `AdminPassword()` give the superuser access for the setup of a test.
 
+## resources/test/issuer
+
+Purpose: a test token issuer. A service uses it in handler tests, to get real signed tokens and a real JWKS endpoint.
+
+Import path: `github.com/techorionai/constellation-platform-go/resources/test/issuer`
+
+Environment variables: None.
+
+Use:
+
+```go
+var t testing.TB
+
+iss := issuer.New(t)
+verifier, err := jwt.New(jwt.Config{Issuer: iss.Issuer(), Audience: "demo", JWKSURL: iss.URL()})
+if err != nil {
+	t.Fatal(err)
+}
+token := iss.Mint(t, issuer.Claims{Scope: "demo:ticket:read"})
+_, err = verifier.Verify(context.Background(), token)
+```
+
+In a real test, `t` is the argument of the test function.
+
+Errors: a failed key generation or signature calls `t.Fatalf`.
+
+Rules and limits:
+
+- `New` makes an ES256 key pair and starts an `httptest` server with `/.well-known/jwks.json`. The server stops at the end of the test.
+- `Mint` signs a token. `Claims` has a default for each field. A zero field gives the default. `Extra` sets a claim to any value, and `Remove` removes a claim. `Alg`, `Typ`, and `Kid` change the header. `SigningKey` signs with a key that is not in the JWKS.
+- `Alg` values `none`, `HS256`, and `RS256` make forged tokens for the tests of the verifier.
+- `Rotate` adds a key and keeps the old keys. `RemoveKey` removes a key from the JWKS and keeps its private key, so a test can still sign with it.
+- `SetStatus` and `SetBody` make the endpoint return an error status or a raw body. `Close` stops the server. `Fetches` counts the requests.
+- `WithClock` sets the clock of the default `iat` and `exp`. Use it with `jwt.WithClock`.
+- Import this package from test code only. The `depguard` rule `no-test-helpers-in-production` enforces it.
+
 ## resources/test/mock
 
-Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), `transaction.Transactor` (`Transactor`), `secrets.Repository` (`SecretsRepository`), `retention.Purger` (`RetentionPurger`), and `retention.Locker` (`RetentionLocker`).
+Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), `transaction.Transactor` (`Transactor`), `secrets.Repository` (`SecretsRepository`), `retention.Purger` (`RetentionPurger`), `retention.Locker` (`RetentionLocker`), and `auth.Verifier` (`Verifier`).
 
 Import path: `github.com/techorionai/constellation-platform-go/resources/test/mock`
 
@@ -1383,7 +1572,7 @@ Errors: None.
 Rules and limits:
 
 - A mock replaces a port only in a unit test. A server-side integration test uses a test container and a live dependency.
-- Each mock has a function field for each method (`LockFunc`, `UnlockFunc`, `UpFunc`, `CheckFunc`). If the field is nil, the mock succeeds. Each mock counts its calls (`LockCalls`, `UnlockCalls`, `UpCalls`, `CheckCalls`).
+- Each mock has a function field for each method (`LockFunc`, `UnlockFunc`, `UpFunc`, `CheckFunc`, `VerifyFunc`). If the field is nil, the mock succeeds. Each mock counts its calls (`LockCalls`, `UnlockCalls`, `UpCalls`, `CheckCalls`, `VerifyCalls`).
 - `CacheStore` keeps the values in a map and applies `cache.CheckKey`, `cache.CheckTTL`, and `cache.CheckValue`. It has the fields `GetFunc`, `SetFunc`, and `DeleteFunc`, the counts `GetCalls`, `SetCalls`, and `DeleteCalls`, and the helpers `Put`, `Value`, and `TTL`.
 - `Transactor` calls `transaction.Resolve`, then calls `fn` without a database transaction. It follows the rules of the adapter for nested calls and `AfterCommit` hooks: the outermost call runs the hooks after `fn` returns nil, and a nested call joins the hooks of the outer call. `BeforeFunc` can return an error before `fn`. `WithinTxCalls` and `CommitCalls` count the calls.
 - `SecretsRepository` keeps the records in a map and follows the rules of the PostgreSQL adapter. It has a function field for each method (`UpsertFunc`, `GetFunc`, `DeleteFunc`, `ListNamesFunc`, `ListForRewrapFunc`, `UpdateEnvelopeFunc`), call counters, the parameters of the list calls, and the helpers `Put` and `Record`.

@@ -10,7 +10,7 @@ These rules apply to this library and to each service that uses it.
 - An adapter is in a subpackage, for example `health/postgres`. An adapter imports its port package. It does not import other adapters.
 - Each adapter has a compile-time interface check.
 - `clients/` holds the low-level constructors for infrastructure clients.
-- `resources/test/containers/` and `resources/test/mock/` hold the test helpers. They are normal packages, so that service repositories can import them.
+- `resources/test/containers/`, `resources/test/issuer/`, and `resources/test/mock/` hold the test helpers. They are normal packages, so that service repositories can import them.
 - The `depguard` rules in `.golangci.yml` enforce these rules.
 
 ## Package documentation
@@ -82,6 +82,8 @@ Resource attributes:
 | `service.instance.id` | `OTEL_RESOURCE_ATTRIBUTES`, or a random UUID for each process. |
 
 Log fields: each JSON record has `time`, `level`, `msg`, and the attributes of the call. A record in an active span also has `trace_id` and `span_id`.
+
+A record that the code writes with a request context (`slog.InfoContext(ctx, ...)`) behind `requestid.Middleware` and `auth.Middleware` also has `request.id`, `principal.id`, `principal.type`, and `client.id`. `telemetry.ContextWithAttrs` adds such fields. The `telemetry` package does not import `auth` or `requestid`.
 
 A service that does not set an `OTEL_*` exporter variable makes no outbound connection.
 
@@ -162,6 +164,24 @@ Values of `outcome` of `retention.duration`:
 - A skipped tick records `retention.duration` with `outcome=skipped`. It does not record `retention.deleted` or `retention.last_success`.
 - Only the instance that has the lock updates `retention.last_success`. An alert reads the maximum of `retention.last_success` over all instances for each `job`. Example rule: the maximum is older than 3 times the interval of the job.
 - Also alert on a rate of `retention.duration{outcome="error"}` that is more than 0 for a period longer than one interval.
+
+
+### Authentication metrics
+
+| Metric | Type | Unit | Attributes | Meaning |
+| ------ | ---- | ---- | ---------- | ------- |
+| `constellation.auth.verify` | Counter | `{verification}` | `outcome` (`ok`, `no_token`, `invalid`, `expired`, `wrong_issuer`, `wrong_audience`, `keys_unavailable`) | One count for each request that `auth.Middleware` verifies. |
+| `constellation.auth.jwks.fetch` | Counter | `{fetch}` | `outcome` (`ok`, `http_error`, `bad_body`, `too_large`, `no_keys`, `network_error`) | One count for each JWKS fetch of `auth/jwt`. |
+
+An alert on a high rate of `keys_unavailable` or of `network_error` shows that the service cannot reach the identity service. An alert on a high rate of `wrong_audience` can show a client that calls the wrong service.
+
+## Authentication
+
+- Never log a token. Never put a token in a span attribute, a metric attribute, or an error body.
+- Never read the principal from a header or from baggage. The principal comes only from a token that `auth.Middleware` verified.
+- Each service checks the audience and the scopes of each request. Use `auth.Middleware` with the `AppKey` of the service as the audience, and `auth.RequireScopes` on each route.
+- The order of the middleware is `requestid.Middleware`, then `auth.Middleware`, then `auth.RequireScopes` for each route.
+- Only `auth/jwt` and the test issuer import the JOSE library. A `depguard` rule keeps it out of `auth` and `requestid`.
 
 ## Executors and decorators
 

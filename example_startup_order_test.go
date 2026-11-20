@@ -4,8 +4,12 @@ import (
 	"context"
 	"log"
 	"log/slog"
+	"net/http"
 	"testing/fstest"
+	"time"
 
+	"github.com/techorionai/constellation-platform-go/auth"
+	authjwt "github.com/techorionai/constellation-platform-go/auth/jwt"
 	"github.com/techorionai/constellation-platform-go/clients/postgres"
 	"github.com/techorionai/constellation-platform-go/clients/valkey"
 	"github.com/techorionai/constellation-platform-go/config"
@@ -14,6 +18,7 @@ import (
 	healthvk "github.com/techorionai/constellation-platform-go/health/valkey"
 	"github.com/techorionai/constellation-platform-go/migrate"
 	migratepg "github.com/techorionai/constellation-platform-go/migrate/postgres"
+	"github.com/techorionai/constellation-platform-go/requestid"
 	"github.com/techorionai/constellation-platform-go/telemetry"
 )
 
@@ -28,6 +33,7 @@ func Example_startupOrder() {
 		Database postgres.Config `envPrefix:"DATABASE__"`
 		Valkey   valkey.Config   `envPrefix:"VALKEY__"`
 		Admin    health.Config   `envPrefix:"ADMIN__"`
+		Auth     authjwt.Config  `envPrefix:"AUTH__"`
 	}
 	// 1. Load the config.
 	if err := config.Load("IDENTITY_", &cfg); err != nil {
@@ -77,13 +83,32 @@ func Example_startupOrder() {
 		log.Fatal(err)
 	}
 
-	// 6. Start the background jobs and the API server.
+	// 6. Start the background jobs and the API server. The verifier fetches the
+	// JWKS on the first request, so the service starts when identity is down.
+	verifier, err := authjwt.New(cfg.Auth)
+	if err != nil {
+		log.Fatal(err)
+	}
+	verifier.Start(ctx)
+	mux := http.NewServeMux()
+	// Protect each route: auth.RequireScopes("demo:ticket:read")(handler)
+	api := &http.Server{
+		Addr:              ":8080",
+		Handler:           requestid.Middleware()(auth.Middleware(verifier)(mux)),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		if err := api.ListenAndServe(); err != nil {
+			log.Print(err)
+		}
+	}()
 	// 7. Tell the state that the service is ready.
 	state.MarkStarted()
 
 	// 8. On a stop signal, do these steps in this order:
-	_ = admin.Drain(ctx) // the load balancer sees 503 during DrainDelay
-	// Stop the API server and the jobs.
+	_ = admin.Drain(ctx)  // the load balancer sees 503 during DrainDelay
+	_ = api.Shutdown(ctx) // stop the API server
+	verifier.Close()      // stop the JWKS refresh and the other jobs
 	pgCheck.Close()
 	kv.Close()
 	db.Close()
