@@ -7,6 +7,7 @@ import (
 
 	"github.com/techorionai/constellation-platform-go/auth"
 	"github.com/techorionai/constellation-platform-go/cache"
+	"github.com/techorionai/constellation-platform-go/manifest"
 	"github.com/techorionai/constellation-platform-go/migrate"
 	"github.com/techorionai/constellation-platform-go/resources/test/mock"
 	"github.com/techorionai/constellation-platform-go/retention"
@@ -78,4 +79,21 @@ func ExampleVerifier() {
 	p, err := v.Verify(context.Background(), "token")
 	fmt.Println(p.ID, err, v.VerifyCalls())
 	// Output: u1 <nil> 1
+}
+
+func ExampleTokenSource() {
+	ts := &mock.TokenSource{TokenFunc: func(_ context.Context, aud string, scopes ...string) (string, error) {
+		return "token-for-" + aud, nil
+	}}
+	var src auth.TokenSource = ts
+	tok, err := src.Token(context.Background(), "identity", "identity:manifest:publish")
+	fmt.Println(tok, err, ts.TokenCalls())
+	// Output: token-for-identity <nil> 1
+}
+
+func ExampleManifestRegistry() {
+	reg := &mock.ManifestRegistry{}
+	err := reg.Publish(context.Background(), manifest.PermissionManifest{App: "demo"})
+	fmt.Println(err, reg.PublishCalls())
+	// Output: <nil> 1
 }

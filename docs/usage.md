@@ -32,6 +32,9 @@ go get github.com/techorionai/constellation-platform-go@vX.Y.Z
 | [`requestid`](#requestid) | Request ID middleware. |
 | [`auth`](#auth) | Principal, token verifier port, scope checks, and HTTP middleware. |
 | [`auth/jwt`](#authjwt) | JWKS token verifier for RFC 9068 access tokens. |
+| [`auth/clientcred`](#authclientcred) | Client credentials token source with `private_key_jwt`. |
+| [`clients/identity`](#clientsidentity) | Generated identity client and manifest registry adapter. |
+| [`manifest`](#manifest) | Publish the permission manifest of a service at startup. |
 | [`resources/test/containers`](#resourcestestcontainers) | Start PostgreSQL and Valkey containers in tests. |
 | [`resources/test/issuer`](#resourcestestissuer) | Test token issuer with a JWKS endpoint. |
 | [`resources/test/mock`](#resourcestestmock) | Mocks of ports. |
@@ -85,6 +88,8 @@ var cfg struct {
 	Valkey   valkey.Config   `envPrefix:"VALKEY__"`
 	Admin    health.Config   `envPrefix:"ADMIN__"`
 	Auth     authjwt.Config  `envPrefix:"AUTH__"`
+	Client   clientcred.Config `envPrefix:"CLIENT__"`
+	Identity identity.Config   `envPrefix:"IDENTITY__"`
 }
 // 1. Load the config.
 if err := config.Load("IDENTITY_", &cfg); err != nil {
@@ -112,8 +117,27 @@ if err != nil {
 	log.Fatal(err)
 }
 
+// Before step 4: load the manifest, and make the token source, the identity
+// client with the scope identity:manifest:publish, the registry, and the
+// publisher.
+// A service embeds the file with //go:embed manifest.json.
+perms, err := manifest.Load(fstest.MapFS{"manifest.json": {Data: []byte(
+	`{"app":"demo","permissions":[],"defaultRoles":[]}`)}}, "manifest.json")
+if err != nil {
+	log.Fatal(err)
+}
+tokens, err := clientcred.New(cfg.Client)
+if err != nil {
+	log.Fatal(err)
+}
+idc, err := identity.New(cfg.Identity, tokens, []string{"identity:manifest:publish"})
+if err != nil {
+	log.Fatal(err)
+}
+publisher := manifest.NewPublisher(identity.NewManifestRegistry(idc), perms)
+
 // 4. Start the admin server. /livez is 200. /readyz is 503.
-state := health.NewState(pgCheck, healthvk.NewChecker(kv.Raw))
+state := health.NewState(pgCheck, healthvk.NewChecker(kv.Raw), publisher.Checker())
 admin := health.NewServer(cfg.Admin, state)
 go func() {
 	if err := admin.ListenAndServe(); err != nil {
@@ -141,6 +165,13 @@ if err != nil {
 	log.Fatal(err)
 }
 verifier.Start(ctx)
+// Publish the manifest in the background. The service does not wait for
+// identity. /readyz is 503 until the publish succeeds.
+go func() {
+	if err := publisher.Run(ctx); err != nil {
+		log.Print(err)
+	}
+}()
 mux := http.NewServeMux()
 // Protect each route: auth.RequireScopes("demo:ticket:read")(handler)
 api := &http.Server{
@@ -1297,6 +1328,8 @@ Import path: `github.com/techorionai/constellation-platform-go/auth`
 
 Environment variables: None. See `auth/jwt` for the verifier settings.
 
+The package also holds the port `auth.TokenSource` for calls to other services, with the errors `ErrNoScopes`, `ErrBadTokenResponse`, `ErrTokenUnavailable`, and `*OAuthError`. `auth.BearerTransport(base, src, audience, scopes...)` is a round tripper that adds `Authorization: Bearer <token>` to a clone of each request. It does not change the request of the caller. A token error stops the request and returns the error. The adapter is `auth/clientcred`.
+
 Use. The order of the middleware is `requestid`, then `auth.Middleware`, then `auth.RequireScopes` for each route:
 
 ```go
@@ -1404,6 +1437,130 @@ Rules and limits:
 - `Start` is optional. Without it, the cache refreshes only when a token has an unknown `kid`. `Close` ends a running refresh fetch and waits for the loop. A second `Close` does nothing. `Start` after `Close` does nothing. `Verify` after `Close` still uses the cached keys.
 - Metric `constellation.auth.jwks.fetch` (counter, unit `{fetch}`) has the attribute `outcome` with the values `ok`, `http_error`, `bad_body`, `too_large`, `no_keys`, and `network_error`.
 - Opaque API tokens, introspection, and revocation are not part of this package.
+
+## auth/clientcred
+
+Purpose: the adapter of `auth.TokenSource`. It gets access tokens with the OAuth client credentials grant and `private_key_jwt` client authentication (RFC 7523). It caches the tokens.
+
+Import path: `github.com/techorionai/constellation-platform-go/auth/clientcred`
+
+Environment variables (nest `clientcred.Config` with `envPrefix:"CLIENT__"`):
+
+| Field | Variable | Default | Rule |
+| ----- | -------- | ------- | ---- |
+| `ID` | `CLIENT__ID` | none | Required. The client ID. |
+| `KeyID` | `CLIENT__KEY_ID` | none | Required. The `kid` of the signing key. |
+| `PrivateKey` | `CLIENT__PRIVATE_KEY` or `CLIENT__PRIVATE_KEY_FILE` | none | Required. PEM EC P-256 private key (PKCS #8 or SEC 1). |
+| `Issuer` | `CLIENT__ISSUER` | none | Required. The issuer URL of the identity service. It is the `aud` of the assertion. |
+| `TokenURL` | `CLIENT__TOKEN_URL` | `<Issuer>/oauth/token` | The URL that the service calls. In Compose it is the internal URL. |
+| `HTTPTimeout` | `CLIENT__HTTP_TIMEOUT` | `10s` | More than 0. |
+
+`Issuer` and `TokenURL` have different jobs. `Issuer` is the name of the identity service. The identity service accepts only its own issuer URL as the `aud` of an assertion. `TokenURL` is the network address that the service calls. In Compose, `Issuer` can be `http://localhost:8080` and `TokenURL` can be `http://identity:8080/oauth/token`.
+
+Use:
+
+```go
+src, err := clientcred.New(cfg.Client)
+token, err := src.Token(ctx, "identity", "identity:manifest:publish")
+```
+
+Errors: `auth.ErrNoScopes`, `auth.ErrBadTokenResponse`, `auth.ErrTokenUnavailable`, and `*auth.OAuthError`.
+
+Rules and limits:
+
+- `Token` needs at least one scope. The identity service rejects a request with no scope.
+- The cache key is the audience and the sorted scope list. The source uses a cached token until 80 percent of its lifetime passes.
+- Each request signs a new assertion with a new `jti`, also a retry by the caller. The assertion has the header `alg=ES256`, `kid`, `typ=JWT`, and the claims `iss`, `sub` (the client ID), `aud` (`Issuer`), `jti`, `iat`, and `exp` (60 seconds).
+- Concurrent calls for one key share one request.
+- The response body has a limit of 64 KiB. A 200 response with no `access_token`, or with an `expires_in` that is missing, 0, or negative, gives `auth.ErrBadTokenResponse`. Nothing goes in the cache.
+- A 5xx response, the OAuth error `temporarily_unavailable`, and a network error give `auth.ErrTokenUnavailable`. `Token` does not retry. The caller decides.
+- Another OAuth error gives `*auth.OAuthError` with the `error` code.
+- The request does not follow redirects.
+- The code never logs or records the private key, the assertion, or a token.
+- Span `auth.clientcred.token` with the attributes `constellation.client.id` and `constellation.token.audience`. Metric `constellation.auth.token.request` (counter, unit `{request}`) has the attribute `outcome` with the values `ok`, `oauth_error`, `unavailable`, `bad_response`, and `network_error`. A cache hit makes no request and is not counted.
+- This adapter does not check the scheme of `Issuer` and `TokenURL`. In production, use `https`.
+
+## clients/identity
+
+Purpose: the client of the identity service API, and the adapter of `manifest.Registry`.
+
+Import path: `github.com/techorionai/constellation-platform-go/clients/identity`
+
+Environment variables (nest `identity.Config` with `envPrefix:"IDENTITY__"`):
+
+| Field | Variable | Default | Rule |
+| ----- | -------- | ------- | ---- |
+| `URL` | `IDENTITY__URL` | none | Required. The base URL of the identity service. |
+| `Timeout` | `IDENTITY__TIMEOUT` | `10s` | More than 0. |
+
+Use:
+
+```go
+c, err := identity.New(cfg.Identity, tokenSource, []string{"identity:manifest:publish"})
+registry := identity.NewManifestRegistry(c)
+```
+
+Errors: `New` returns an error for a missing or wrong `URL`, a nil token source, and no scopes. `ManifestRegistry.Publish` maps the result:
+
+| Result | Error |
+| ------ | ----- |
+| 200 | `nil` |
+| 422 | `*manifest.InvalidError` with the `Problem` codes and fields |
+| 401 or 403 | `manifest.ErrDenied` |
+| 5xx, network error, `auth.ErrTokenUnavailable` from the token source | `manifest.ErrUnavailable` |
+| OAuth error `invalid_client`, `invalid_scope`, or `unauthorized_client` from the token source | `manifest.ErrDenied` |
+| Other | `manifest.ErrUnavailable` |
+
+Rules and limits:
+
+- `identity.gen.go` is generated by `oapi-codegen` from `api/openapi/Constellation.Identity.openapi.yaml`. Do not change it by hand.
+- The generated HTTP client type is `APIClient`, because the schema `Client` (an OAuth client) uses the name `Client`. Use `ClientWithResponses` in your code.
+- The caller gives the scopes. The client asks for the audience `identity`. The package imports the port `auth.TokenSource`, not the adapter `auth/clientcred`.
+- The client does not follow redirects, because a redirect target must not get the token.
+
+To update the generated client after a contracts release:
+
+1. Copy the file from the new tag: `curl -fsSL -o api/openapi/Constellation.Identity.openapi.yaml https://raw.githubusercontent.com/techorionai/constellation-contracts/vX.Y.Z/generated/openapi/Constellation.Identity.openapi.yaml`.
+2. Write the tag in `api/openapi/CONTRACTS_VERSION`.
+3. Run `go generate ./...`, then `go test ./...`.
+4. Commit the OpenAPI file, the version file, and `clients/identity/identity.gen.go` together. CI runs `go generate ./... && git diff --exit-code` and fails if the generated file is not current.
+
+## manifest
+
+Purpose: publish the permission manifest of a service to the identity service at startup, and report the result to the readiness check.
+
+Import path: `github.com/techorionai/constellation-platform-go/manifest`
+
+Environment variables: None.
+
+Use:
+
+```go
+perms, err := manifest.Load(files, "manifest.json") // files: an embed.FS
+publisher := manifest.NewPublisher(identity.NewManifestRegistry(idc), perms)
+state := health.NewState(publisher.Checker()) // named "manifest"
+go func() { _ = publisher.Run(ctx) }()
+```
+
+Place in the startup order: load the manifest and make the publisher before step 4. Give `publisher.Checker()` to `health.NewState` in step 4. Start `publisher.Run(ctx)` in a goroutine in step 6 and do not wait for it. `MarkStarted` does not wait for identity.
+
+Errors of `Registry.Publish`: `*manifest.InvalidError`, `manifest.ErrDenied`, and `manifest.ErrUnavailable`. `Run` acts on each result:
+
+| Result | Action | Log | Metric `outcome` |
+| ------ | ------ | --- | ---------------- |
+| Success | Stop. The checker reports "ready". | `info` | `ok` |
+| `*InvalidError` | Stop with no retry, because the manifest is wrong. `Run` returns the error. The checker stays "not ready". | `error` with the `Problem` codes | `invalid` |
+| `ErrDenied` | Retry with backoff. An operator can fix the client config without a restart. | `error` on each attempt | `denied` |
+| `ErrUnavailable` or another error | Retry with backoff | `warn` on each attempt | `unavailable` |
+| `ctx` ends | Return `ctx.Err()` | none | none |
+
+Rules and limits:
+
+- The backoff is exponential from 1 second to 1 minute, with jitter. `WithBackoff` changes it.
+- Metric `constellation.manifest.publish` (counter, unit `{attempt}`) has the attribute `outcome`.
+- A service is not ready until identity knows its permissions. It does not stop when identity is down.
+- `manifest.Load` reads a JSON file and checks the rules of the identity service: the app key, the app prefix of each permission key, the role permissions that the manifest defines, and no duplicate key. It rejects unknown fields. Call it in a unit test of the service to find a wrong manifest early.
+- The package does not import `net/http` or an adapter.
 
 ## Admin sample: rotation and a manual retention run
 
@@ -1571,7 +1728,7 @@ Rules and limits:
 
 ## resources/test/mock
 
-Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), `transaction.Transactor` (`Transactor`), `secrets.Repository` (`SecretsRepository`), `retention.Purger` (`RetentionPurger`), `retention.Locker` (`RetentionLocker`), and `auth.Verifier` (`Verifier`).
+Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), `transaction.Transactor` (`Transactor`), `secrets.Repository` (`SecretsRepository`), `retention.Purger` (`RetentionPurger`), `retention.Locker` (`RetentionLocker`), `auth.Verifier` (`Verifier`), `auth.TokenSource` (`TokenSource`), and `manifest.Registry` (`ManifestRegistry`).
 
 Import path: `github.com/techorionai/constellation-platform-go/resources/test/mock`
 
@@ -1594,7 +1751,7 @@ Errors: None.
 Rules and limits:
 
 - A mock replaces a port only in a unit test. A server-side integration test uses a test container and a live dependency.
-- Each mock has a function field for each method (`LockFunc`, `UnlockFunc`, `UpFunc`, `CheckFunc`, `VerifyFunc`). If the field is nil, the mock succeeds. The exception is `Verifier`: if `VerifyFunc` is nil, `Verify` returns `auth.ErrInvalidToken`, so a mock that is not set up fails closed. Each mock counts its calls (`LockCalls`, `UnlockCalls`, `UpCalls`, `CheckCalls`, `VerifyCalls`).
+- Each mock has a function field for each method (`LockFunc`, `UnlockFunc`, `UpFunc`, `CheckFunc`, `VerifyFunc`, `TokenFunc`, `PublishFunc`). If the field is nil, the mock succeeds. The exceptions are `Verifier` and `TokenSource`: if `VerifyFunc` is nil, `Verify` returns `auth.ErrInvalidToken`, and if `TokenFunc` is nil, `Token` returns `auth.ErrTokenUnavailable`, so a mock that is not set up fails closed. Each mock counts its calls (`LockCalls`, `UnlockCalls`, `UpCalls`, `CheckCalls`, `VerifyCalls`, `TokenCalls`, `PublishCalls`).
 - `CacheStore` keeps the values in a map and applies `cache.CheckKey`, `cache.CheckTTL`, and `cache.CheckValue`. It has the fields `GetFunc`, `SetFunc`, and `DeleteFunc`, the counts `GetCalls`, `SetCalls`, and `DeleteCalls`, and the helpers `Put`, `Value`, and `TTL`.
 - `Transactor` calls `transaction.Resolve`, then calls `fn` without a database transaction. It follows the rules of the adapter for nested calls and `AfterCommit` hooks: the outermost call runs the hooks after `fn` returns nil, and a nested call joins the hooks of the outer call. `BeforeFunc` can return an error before `fn`. `WithinTxCalls` and `CommitCalls` count the calls.
 - `SecretsRepository` keeps the records in a map and follows the rules of the PostgreSQL adapter. It has a function field for each method (`UpsertFunc`, `GetFunc`, `DeleteFunc`, `ListNamesFunc`, `ListForRewrapFunc`, `UpdateEnvelopeFunc`), call counters, the parameters of the list calls, and the helpers `Put` and `Record`.
