@@ -557,7 +557,8 @@ func TestBadTwoSegmentScope(t *testing.T) {
 	f := newFixture(t)
 	for _, s := range []string{
 		"identity:user", "Identity:admin", "identity:Admin",
-		"identity:admin ", "demo:admin", "identity:", ":admin", "openid",
+		"identity:admin ", "identity:admin\n", "identity:admin  identity:client:write",
+		"demo:admin", "identity:", ":admin", "openid",
 	} {
 		_, err := f.verify(t, issuer.Claims{Scope: s})
 		wantErr(t, err, auth.ErrInvalidToken)
