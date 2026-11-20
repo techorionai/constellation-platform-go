@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -73,7 +74,15 @@ func Middleware(v Verifier, opts ...Option) func(http.Handler) http.Handler {
 }
 
 func verifyRequest(ctx context.Context, v Verifier, r *http.Request) (Principal, error) {
-	token, ok := bearerToken(r.Header.Get("Authorization"))
+	values := r.Header.Values("Authorization")
+	if len(values) > 1 {
+		// Another component may read another header. Do not guess.
+		return Principal{}, fmt.Errorf("auth: more than one Authorization header: %w", ErrInvalidToken)
+	}
+	if len(values) == 0 {
+		return Principal{}, ErrNoToken
+	}
+	token, ok := bearerToken(values[0])
 	if !ok {
 		return Principal{}, ErrNoToken
 	}
