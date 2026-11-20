@@ -151,6 +151,7 @@ func newFixture(t *testing.T, s setup) *fixture {
 	cfg := clientcred.Config{
 		ID: clientID, KeyID: keyID, PrivateKey: config.Secret(privPEM),
 		Issuer: issuer, TokenURL: ep.url(), HTTPTimeout: 5 * time.Second,
+		AllowInsecureHTTP: true,
 	}
 	if s.cfg != nil {
 		s.cfg(&cfg)
@@ -355,6 +356,11 @@ func TestU6ScopeOrder(t *testing.T) {
 	if reqs[0].form["scope"] != "a:a:a b:b:b" {
 		t.Errorf("scope = %q", reqs[0].form["scope"])
 	}
+	// An empty scope and a duplicate scope are removed. The entry is the same.
+	_, _ = f.src.Token(ctx, "identity", "", "b:b:b", "a:a:a", "a:a:a")
+	if n := len(f.ep.requests()); n != 1 {
+		t.Fatalf("requests = %d, want 1 (same cache entry)", n)
+	}
 	// Another audience is another entry.
 	_, _ = f.src.Token(ctx, "other", "a:a:a", "b:b:b")
 	if n := len(f.ep.requests()); n != 2 {
@@ -429,6 +435,7 @@ func TestU7bBadExpiresIn(t *testing.T) {
 		"negative":   {"access_token": "x", "expires_in": -5},
 		"no token":   {"expires_in": 100},
 		"empty body": {},
+		"too large":  {"access_token": "x", "expires_in": 1e10},
 	}
 	for name, body := range bodies {
 		t.Run(name, func(t *testing.T) {
@@ -612,6 +619,7 @@ func TestU9KeyFile(t *testing.T) {
 	t.Setenv("TEST_CLIENT__ID", clientID)
 	t.Setenv("TEST_CLIENT__KEY_ID", keyID)
 	t.Setenv("TEST_CLIENT__ISSUER", issuer)
+	t.Setenv("TEST_CLIENT__ALLOW_INSECURE_HTTP", "true")
 	t.Setenv("TEST_CLIENT__PRIVATE_KEY_FILE", path)
 	var cfg struct {
 		Client clientcred.Config `envPrefix:"CLIENT__"`
@@ -656,7 +664,10 @@ func TestU9KeyFile(t *testing.T) {
 // U9a: required fields and defaults.
 func TestU9aConfig(t *testing.T) {
 	key := pemPKCS8(t, newKey(t))
-	good := clientcred.Config{ID: clientID, KeyID: keyID, PrivateKey: config.Secret(key), Issuer: issuer}
+	good := clientcred.Config{
+		ID: clientID, KeyID: keyID, PrivateKey: config.Secret(key), Issuer: issuer,
+		HTTPTimeout: 10 * time.Second, AllowInsecureHTTP: true,
+	}
 	cases := map[string]struct {
 		mutate func(*clientcred.Config)
 		want   string
@@ -666,6 +677,7 @@ func TestU9aConfig(t *testing.T) {
 		"no Issuer": {func(c *clientcred.Config) { c.Issuer = "" }, "CLIENT__ISSUER"},
 		"no key":    {func(c *clientcred.Config) { c.PrivateKey = "" }, "CLIENT__PRIVATE_KEY"},
 		"timeout":   {func(c *clientcred.Config) { c.HTTPTimeout = -1 }, "CLIENT__HTTP_TIMEOUT"},
+		"timeout 0": {func(c *clientcred.Config) { c.HTTPTimeout = 0 }, "CLIENT__HTTP_TIMEOUT"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -682,6 +694,7 @@ func TestU9aConfig(t *testing.T) {
 	t.Setenv("TEST_CLIENT__KEY_ID", keyID)
 	t.Setenv("TEST_CLIENT__ISSUER", issuer)
 	t.Setenv("TEST_CLIENT__PRIVATE_KEY", key)
+	t.Setenv("TEST_CLIENT__ALLOW_INSECURE_HTTP", "true")
 	var cfg struct {
 		Client clientcred.Config `envPrefix:"CLIENT__"`
 	}
@@ -690,6 +703,9 @@ func TestU9aConfig(t *testing.T) {
 	}
 	if cfg.Client.HTTPTimeout != 10*time.Second {
 		t.Errorf("HTTPTimeout = %v", cfg.Client.HTTPTimeout)
+	}
+	if !cfg.Client.AllowInsecureHTTP {
+		t.Error("CLIENT__ALLOW_INSECURE_HTTP is not loaded")
 	}
 	// The default TokenURL goes to <Issuer>/oauth/token.
 	ep := newEndpoint(t)
@@ -715,5 +731,122 @@ func TestConfigRedactsKey(t *testing.T) {
 		if strings.Contains(out, "PRIVATE KEY") {
 			t.Errorf("config output has the key: %s", out)
 		}
+	}
+}
+
+// U6: the request has no empty or duplicate scope.
+func TestU6RequestScopes(t *testing.T) {
+	f := newFixture(t, setup{})
+	if _, err := f.src.Token(context.Background(), "identity", "b:b:b", "", "a:a:a", "b:b:b"); err != nil {
+		t.Fatal(err)
+	}
+	reqs := f.ep.requests()
+	if len(reqs) != 1 || reqs[0].form["scope"] != "a:a:a b:b:b" {
+		t.Fatalf("requests = %v", reqs)
+	}
+}
+
+// U7f: a failed refresh before the expiry returns the cached token. After the
+// expiry it returns the error.
+func TestU7fRefreshFailsBeforeExpiry(t *testing.T) {
+	f := newFixture(t, setup{})
+	ctx := context.Background()
+	tok, err := f.src.Token(ctx, "identity", "s:a:b")
+	if err != nil || tok != "tok-1" {
+		t.Fatalf("token = %q, err = %v", tok, err)
+	}
+	f.ep.mu.Lock()
+	f.ep.handler = func(w http.ResponseWriter, _ *http.Request, _ int) {
+		writeJSON(w, 503, map[string]any{"error": "temporarily_unavailable"})
+	}
+	f.ep.mu.Unlock()
+	f.clock.advance(85 * time.Second)
+	tok, err = f.src.Token(ctx, "identity", "s:a:b")
+	if err != nil || tok != "tok-1" {
+		t.Fatalf("before expiry: token = %q, err = %v", tok, err)
+	}
+	if n := len(f.ep.requests()); n != 2 {
+		t.Fatalf("requests = %d, want 2", n)
+	}
+	f.clock.advance(20 * time.Second)
+	tok, err = f.src.Token(ctx, "identity", "s:a:b")
+	if !errors.Is(err, auth.ErrTokenUnavailable) || tok != "" {
+		t.Fatalf("after expiry: token = %q, err = %v", tok, err)
+	}
+	// The next call tries again.
+	_, _ = f.src.Token(ctx, "identity", "s:a:b")
+	if n := len(f.ep.requests()); n != 4 {
+		t.Fatalf("requests = %d, want 4", n)
+	}
+}
+
+// U9c: the scheme of Issuer and TokenURL.
+func TestU9cScheme(t *testing.T) {
+	key := pemPKCS8(t, newKey(t))
+	base := clientcred.Config{
+		ID: clientID, KeyID: keyID, PrivateKey: config.Secret(key),
+		Issuer: "https://id.example.com", HTTPTimeout: time.Second,
+	}
+	cases := map[string]struct {
+		mutate  func(*clientcred.Config)
+		wantErr string
+	}{
+		"https":                    {func(*clientcred.Config) {}, ""},
+		"http issuer":              {func(c *clientcred.Config) { c.Issuer = "http://id.example.com" }, "CLIENT__ISSUER"},
+		"http issuer, default url": {func(c *clientcred.Config) { c.Issuer = "http://id.example.com"; c.TokenURL = "" }, "CLIENT__ISSUER"},
+		"http token url":           {func(c *clientcred.Config) { c.TokenURL = "http://id.internal/oauth/token" }, "CLIENT__TOKEN_URL"},
+		"ftp issuer":               {func(c *clientcred.Config) { c.Issuer = "ftp://id.example.com" }, "CLIENT__ISSUER"},
+		"ftp token url":            {func(c *clientcred.Config) { c.TokenURL = "ftp://id.internal/oauth/token" }, "CLIENT__TOKEN_URL"},
+		"no host":                  {func(c *clientcred.Config) { c.TokenURL = "https:///oauth/token" }, "CLIENT__TOKEN_URL"},
+		"allow, http issuer": {func(c *clientcred.Config) {
+			c.Issuer = "http://id.example.com"
+			c.TokenURL = "http://id.internal/oauth/token"
+			c.AllowInsecureHTTP = true
+		}, ""},
+		"allow, default url": {func(c *clientcred.Config) {
+			c.Issuer = "http://id.example.com"
+			c.TokenURL = ""
+			c.AllowInsecureHTTP = true
+		}, ""},
+		"allow, ftp issuer": {func(c *clientcred.Config) {
+			c.Issuer = "ftp://id.example.com"
+			c.AllowInsecureHTTP = true
+		}, "CLIENT__ISSUER"},
+		"allow, ftp token url": {func(c *clientcred.Config) {
+			c.TokenURL = "ftp://id.internal/oauth/token"
+			c.AllowInsecureHTTP = true
+		}, "CLIENT__TOKEN_URL"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := base
+			tc.mutate(&c)
+			_, err := clientcred.New(c)
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("err = %v", err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("err = %v, want the name %s", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// U9e: the token source does not follow a redirect. The target gets no request.
+func TestU9eNoRedirectTarget(t *testing.T) {
+	var hits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	t.Cleanup(target.Close)
+	for _, code := range []int{http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		f := newFixture(t, setup{})
+		f.ep.handler = func(w http.ResponseWriter, r *http.Request, _ int) {
+			http.Redirect(w, r, target.URL, code)
+		}
+		if _, err := f.src.Token(context.Background(), "identity", "s:a:b"); err == nil {
+			t.Fatalf("%d: no error", code)
+		}
+	}
+	if hits.Load() != 0 {
+		t.Errorf("the target got %d requests", hits.Load())
 	}
 }

@@ -16,6 +16,9 @@
 //	CLIENT__ISSUER        issuer URL of the identity service, required
 //	CLIENT__TOKEN_URL     URL of the token endpoint, default <issuer>/oauth/token
 //	CLIENT__HTTP_TIMEOUT  time limit of one token request, default 10s
+//	CLIENT__ALLOW_INSECURE_HTTP
+//	                      allows the scheme http for the issuer and the token
+//	                      URL, default false
 //
 // The assertion audience is always Issuer. TokenURL is the URL that the service
 // calls. It can differ from Issuer, for example the internal URL in Compose.

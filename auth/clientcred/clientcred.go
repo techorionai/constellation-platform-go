@@ -40,6 +40,8 @@ const (
 	assertionLifetime = 60 * time.Second
 	maxResponseBytes  = 64 << 10
 	refreshFraction   = 0.8
+	// maxExpiresIn is the longest token lifetime that the source accepts.
+	maxExpiresIn = 24 * time.Hour
 )
 
 // Outcomes of a token request, the values of the attribute "outcome".
@@ -70,6 +72,27 @@ type Config struct {
 	TokenURL string `env:"TOKEN_URL"`
 	// HTTPTimeout is the time limit of one token request.
 	HTTPTimeout time.Duration `env:"HTTP_TIMEOUT" envDefault:"10s"`
+	// AllowInsecureHTTP allows the scheme http for Issuer and TokenURL. Use it
+	// only for local compose and tests. A service must not set it in production.
+	AllowInsecureHTTP bool `env:"ALLOW_INSECURE_HTTP" envDefault:"false"`
+}
+
+// checkURL returns an error if the URL does not use https. With allowHTTP it
+// also accepts http.
+func checkURL(name, variable, raw string, allowHTTP bool) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("auth/clientcred: %s (%s) is not a valid http or https URL", name, variable)
+	}
+	switch {
+	case u.Scheme == "https":
+	case u.Scheme == "http" && allowHTTP:
+	case u.Scheme == "http":
+		return fmt.Errorf("auth/clientcred: %s (%s) must use https (set CLIENT__ALLOW_INSECURE_HTTP only for local use)", name, variable)
+	default:
+		return fmt.Errorf("auth/clientcred: %s (%s) is not a valid http or https URL", name, variable)
+	}
+	return nil
 }
 
 type resolved struct {
@@ -91,11 +114,14 @@ func (c Config) resolve() (resolved, error) {
 	if c.TokenURL == "" {
 		c.TokenURL = strings.TrimRight(c.Issuer, "/") + "/oauth/token"
 	}
-	if c.HTTPTimeout < 0 {
-		return resolved{}, errors.New("auth/clientcred: HTTPTimeout (CLIENT__HTTP_TIMEOUT) must be more than 0")
+	if err := checkURL("Issuer", "CLIENT__ISSUER", c.Issuer, c.AllowInsecureHTTP); err != nil {
+		return resolved{}, err
 	}
-	if c.HTTPTimeout == 0 {
-		c.HTTPTimeout = 10 * time.Second
+	if err := checkURL("TokenURL", "CLIENT__TOKEN_URL", c.TokenURL, c.AllowInsecureHTTP); err != nil {
+		return resolved{}, err
+	}
+	if c.HTTPTimeout <= 0 {
+		return resolved{}, errors.New("auth/clientcred: HTTPTimeout (CLIENT__HTTP_TIMEOUT) must be more than 0")
 	}
 	key, err := parseKey(c.PrivateKey.Reveal())
 	if err != nil {
@@ -241,7 +267,15 @@ func (s *Source) Token(ctx context.Context, audience string, scopes ...string) (
 		if tok, ok := s.cached(key); ok {
 			return tok, nil
 		}
-		return s.fetch(context.WithoutCancel(ctx), key, audience, scopes)
+		tok, err := s.fetch(context.WithoutCancel(ctx), key, audience, scopes)
+		if err != nil {
+			// A failed refresh before the expiry keeps the cached token. The
+			// next call tries to refresh again.
+			if old, valid := s.unexpired(key); valid {
+				return old, nil
+			}
+		}
+		return tok, err
 	})
 	select {
 	case <-ctx.Done():
@@ -275,6 +309,17 @@ func (s *Source) cached(key string) (string, bool) {
 	}
 	now := s.clock()
 	if !now.Before(e.refreshAt) || !now.Before(e.expiresAt) {
+		return "", false
+	}
+	return e.token, true
+}
+
+// unexpired returns the cached token if it is before its expiry.
+func (s *Source) unexpired(key string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.cache[key]
+	if !ok || !s.clock().Before(e.expiresAt) {
 		return "", false
 	}
 	return e.token, true
@@ -365,6 +410,9 @@ func (s *Source) request(ctx context.Context, key, audience string, scopes []str
 		}
 		if !(tr.ExpiresIn > 0) {
 			return "", outcomeBadResponse, fmt.Errorf("%w: expires_in is not more than 0", auth.ErrBadTokenResponse)
+		}
+		if tr.ExpiresIn > maxExpiresIn.Seconds() {
+			return "", outcomeBadResponse, fmt.Errorf("%w: expires_in is more than %s", auth.ErrBadTokenResponse, maxExpiresIn)
 		}
 		life := time.Duration(tr.ExpiresIn * float64(time.Second))
 		s.mu.Lock()
