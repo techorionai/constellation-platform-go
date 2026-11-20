@@ -1,0 +1,2732 @@
+openapi: 3.0.0
+info:
+  title: Constellation Identity
+  description: |-
+    The identity service API. The OAuth and OIDC endpoints use standard paths and RFC 6749 errors.
+    The other operations use the prefix `/v1` and RFC 9457 errors.
+    The permission manifest of the service is in `services/identity/manifest.json`.
+  version: 0.0.0
+tags: []
+paths:
+  /.well-known/jwks.json:
+    get:
+      operationId: Discovery_jwks
+      description: Get the public keys that verify the tokens of the service.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonWebKeySet'
+      security:
+        - {}
+  /.well-known/openid-configuration:
+    get:
+      operationId: Discovery_openidConfiguration
+      description: Get the OIDC discovery document.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscoveryDocument'
+      security:
+        - {}
+  /oauth/authorize:
+    get:
+      operationId: OAuth_authorize
+      description: |-
+        Start the authorization code flow with PKCE.
+        The server shows a login page, or it redirects with `code` and `state`, or with an error.
+        The query has `response_type` (`code`), `client_id`, `redirect_uri`, `scope`, `state`, `nonce`,
+        `code_challenge`, and `code_challenge_method` (`S256`). `prompt` and `max_age` are optional.
+      parameters:
+        - name: response_type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - code
+          explode: false
+        - name: client_id
+          in: query
+          required: true
+          schema:
+            type: string
+          explode: false
+        - name: redirect_uri
+          in: query
+          required: true
+          schema:
+            type: string
+          explode: false
+        - name: scope
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/RequestScopeString'
+          explode: false
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+          explode: false
+        - name: nonce
+          in: query
+          required: true
+          schema:
+            type: string
+          explode: false
+        - name: code_challenge
+          in: query
+          required: true
+          schema:
+            type: string
+          explode: false
+        - name: code_challenge_method
+          in: query
+          required: true
+          schema:
+            type: string
+            enum:
+              - S256
+          explode: false
+        - name: prompt
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+        - name: max_age
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+          explode: false
+      responses:
+        '200':
+          description: A page that the server shows to a person in a browser.
+          content:
+            text/html:
+              schema:
+                type: string
+        '302':
+          description: A redirect to another URL.
+          headers:
+            location:
+              required: true
+              description: The URL to go to.
+              schema:
+                type: string
+      security:
+        - {}
+  /oauth/end_session:
+    get:
+      operationId: OAuth_endSession
+      description: |-
+        End the session of a user (OIDC RP-initiated logout).
+        The server shows a page, or it redirects to `post_logout_redirect_uri` with `state`.
+      parameters:
+        - name: id_token_hint
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+        - name: post_logout_redirect_uri
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+          explode: false
+      responses:
+        '200':
+          description: A page that the server shows to a person in a browser.
+          content:
+            text/html:
+              schema:
+                type: string
+        '302':
+          description: A redirect to another URL.
+          headers:
+            location:
+              required: true
+              description: The URL to go to.
+              schema:
+                type: string
+      security:
+        - {}
+  /oauth/revoke:
+    post:
+      operationId: OAuth_revoke
+      description: |-
+        Revoke a token (RFC 7009).
+        The response is 200 with no body. This is also true for an unknown token.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+        '400':
+          description: |-
+            Error body of an OAuth operation (RFC 6749 section 5.2).
+            The status is 400, except for these codes. `invalid_client` is 401.
+            `server_error` is 500. `temporarily_unavailable` is 503.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+        '401':
+          description: |-
+            Error body of an OAuth operation (RFC 6749 section 5.2).
+            The status is 400, except for these codes. `invalid_client` is 401.
+            `server_error` is 500. `temporarily_unavailable` is 503.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+        '500':
+          description: |-
+            Error body of an OAuth operation (RFC 6749 section 5.2).
+            The status is 400, except for these codes. `invalid_client` is 401.
+            `server_error` is 500. `temporarily_unavailable` is 503.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+        '503':
+          description: |-
+            Error body of an OAuth operation (RFC 6749 section 5.2).
+            The status is 400, except for these codes. `invalid_client` is 401.
+            `server_error` is 500. `temporarily_unavailable` is 503.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RevokeRequest'
+      security:
+        - {}
+  /oauth/token:
+    post:
+      operationId: OAuth_token
+      description: |-
+        Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, or `refresh_token`.
+        The `scope` of the request can have OIDC scopes. The `scope` of the response has permission keys only.
+        The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          headers:
+            Cache-Control:
+              required: true
+              description: Cache rule.
+              schema:
+                type: string
+                enum:
+                  - no-store
+            Pragma:
+              required: true
+              description: Cache rule for old HTTP/1.0 caches.
+              schema:
+                type: string
+                enum:
+                  - no-cache
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: |-
+            Error body of an OAuth operation (RFC 6749 section 5.2).
+            The status is 400, except for these codes. `invalid_client` is 401.
+            `server_error` is 500. `temporarily_unavailable` is 503.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+        '401':
+          description: |-
+            Error body of an OAuth operation (RFC 6749 section 5.2).
+            The status is 400, except for these codes. `invalid_client` is 401.
+            `server_error` is 500. `temporarily_unavailable` is 503.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+        '500':
+          description: |-
+            Error body of an OAuth operation (RFC 6749 section 5.2).
+            The status is 400, except for these codes. `invalid_client` is 401.
+            `server_error` is 500. `temporarily_unavailable` is 503.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+        '503':
+          description: |-
+            Error body of an OAuth operation (RFC 6749 section 5.2).
+            The status is 400, except for these codes. `invalid_client` is 401.
+            `server_error` is 500. `temporarily_unavailable` is 503.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+      security:
+        - {}
+  /oauth/userinfo:
+    get:
+      operationId: OAuth_userinfo
+      description: |-
+        Get the claims of the user of an access token.
+        It accepts a user access token of the identity issuer with any audience.
+        All clients are first-party, so the response has all four claims.
+        A service token gets 403 with `error="insufficient_scope"`.
+        The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          headers:
+            Cache-Control:
+              required: true
+              description: Cache rule.
+              schema:
+                type: string
+                enum:
+                  - no-store
+            Pragma:
+              required: true
+              description: Cache rule for old HTTP/1.0 caches.
+              schema:
+                type: string
+                enum:
+                  - no-cache
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfo'
+        '401':
+          description: The access token is not valid (RFC 6750). The response has no body.
+          headers:
+            WWW-Authenticate:
+              required: true
+              description: Challenge, for example `Bearer error="invalid_token"`.
+              schema:
+                type: string
+        '403':
+          description: |-
+            The access token does not have enough scope, or it is a service token on a user operation (RFC 6750).
+            The response has no body.
+          headers:
+            WWW-Authenticate:
+              required: true
+              description: Challenge, for example `Bearer error="insufficient_scope"`.
+              schema:
+                type: string
+  /v1/clients:
+    post:
+      operationId: Clients_create
+      description: |-
+        Create a client. The token needs `identity:client:write` and `identity:admin`.
+        Error codes of `UnprocessableContent`: `invalid_redirect_uri` and `app_reserved`.
+      parameters: []
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Client'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '422':
+          description: The request is well formed, but the server cannot process its content.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableContent'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientCreate'
+      x-required-scopes:
+        - identity:client:write
+        - identity:admin
+    get:
+      operationId: Clients_list
+      description: List the clients.
+      parameters:
+        - $ref: '#/components/parameters/CursorPageParams.pageToken'
+        - $ref: '#/components/parameters/CursorPageParams.pageSize'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientPage'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:client:read
+  /v1/clients/{clientId}:
+    get:
+      operationId: Clients_get
+      description: Get one client.
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Client'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:client:read
+    patch:
+      operationId: Clients_update
+      description: |-
+        Change a client. The token needs `identity:client:write` and `identity:admin`.
+        The `app` of a client cannot change. Error code of `Conflict`: `client_managed_by_config`.
+        Error codes of `UnprocessableContent`: `invalid_redirect_uri`, `client_type_immutable`, and `app_reserved`.
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Client'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '409':
+          description: The request conflicts with the state of the resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '422':
+          description: The request is well formed, but the server cannot process its content.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableContent'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientUpdate'
+      x-required-scopes:
+        - identity:client:write
+        - identity:admin
+  /v1/clients/{clientId}/keys:
+    post:
+      operationId: ClientKeys_add
+      description: |-
+        Add a public key to a service client. The token needs `identity:client:write` and `identity:admin`.
+        Error code of `Conflict`: `client_managed_by_config`.
+        Error codes of `UnprocessableContent`: `client_type_unsupported` and `invalid_jwk`.
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientKey'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '409':
+          description: The request conflicts with the state of the resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '422':
+          description: The request is well formed, but the server cannot process its content.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableContent'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JsonWebKey'
+      x-required-scopes:
+        - identity:client:write
+        - identity:admin
+  /v1/clients/{clientId}/keys/{kid}:
+    delete:
+      operationId: ClientKeys_remove
+      description: |-
+        Remove a key from a service client. The token needs `identity:client:write` and `identity:admin`.
+        Error code of `Conflict`: `client_managed_by_config`.
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: kid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '409':
+          description: The request conflicts with the state of the resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:client:write
+        - identity:admin
+  /v1/clients/{clientId}/roles:
+    get:
+      operationId: ClientRoles_list
+      description: 'List the roles of a service client. Error code of `UnprocessableContent`: `client_type_unsupported`.'
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CursorPageParams.pageToken'
+        - $ref: '#/components/parameters/CursorPageParams.pageSize'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleAssignmentPage'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '422':
+          description: The request is well formed, but the server cannot process its content.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableContent'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:role:read
+  /v1/clients/{clientId}/roles/{role}:
+    put:
+      operationId: ClientRoles_assign
+      description: |-
+        Give a role to a service client. Error code of `Conflict`: `client_managed_by_config`.
+        Error codes of `UnprocessableContent`: `role_unknown` and `client_type_unsupported`.
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: role
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/RoleRef'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleAssignment'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '409':
+          description: The request conflicts with the state of the resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '422':
+          description: The request is well formed, but the server cannot process its content.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableContent'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:role:assign
+    delete:
+      operationId: ClientRoles_remove
+      description: |-
+        Remove a role from a service client. Error code of `Conflict`: `client_managed_by_config`.
+        Error code of `UnprocessableContent`: `client_type_unsupported`.
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: role
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/RoleRef'
+      responses:
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '409':
+          description: The request conflicts with the state of the resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '422':
+          description: The request is well formed, but the server cannot process its content.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableContent'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:role:assign
+  /v1/me:
+    get:
+      operationId: Me_get
+      description: Get the user of the access token. It needs no permission.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes: []
+  /v1/permission-manifests:
+    get:
+      operationId: PermissionManifests_list
+      description: List the stored manifests.
+      parameters:
+        - $ref: '#/components/parameters/CursorPageParams.pageToken'
+        - $ref: '#/components/parameters/CursorPageParams.pageSize'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishedManifestPage'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:role:read
+  /v1/permission-manifests/{app}:
+    put:
+      operationId: PermissionManifests_publish
+      description: |-
+        Publish the manifest of an app. The `{app}` in the path must be the `app` of the manifest.
+        The caller must be a service client of that app. The app `identity` is not allowed.
+        Error codes of `UnprocessableContent`: `manifest_app_mismatch`, `permission_app_mismatch`,
+        `role_permission_unknown`, and `duplicate_key`.
+      parameters:
+        - name: app
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/AppKey'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishedManifest'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '422':
+          description: The request is well formed, but the server cannot process its content.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableContent'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PermissionManifest'
+      x-required-scopes:
+        - identity:manifest:publish
+    get:
+      operationId: PermissionManifests_get
+      description: Get the stored manifest of one app.
+      parameters:
+        - name: app
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/AppKey'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishedManifest'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:role:read
+  /v1/roles:
+    get:
+      operationId: Roles_list
+      description: List the roles. Use `app` to list the roles of one app.
+      parameters:
+        - name: app
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AppKey'
+          explode: false
+        - $ref: '#/components/parameters/CursorPageParams.pageToken'
+        - $ref: '#/components/parameters/CursorPageParams.pageSize'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RolePage'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:role:read
+  /v1/roles/{role}:
+    get:
+      operationId: Roles_get
+      description: Get one role.
+      parameters:
+        - name: role
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/RoleRef'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Role'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:role:read
+  /v1/sessions/{sessionId}:
+    delete:
+      operationId: Sessions_revoke
+      description: Revoke one session.
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:session:revoke
+  /v1/users:
+    post:
+      operationId: Users_create
+      description: |-
+        Create a user and an invite. Error code of `Conflict`: `email_taken`.
+        Error code of `UnprocessableContent`: `invalid_user`. The email or the name breaks the rules of the identity service.
+      parameters: []
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          headers:
+            Cache-Control:
+              required: true
+              description: Cache rule.
+              schema:
+                type: string
+                enum:
+                  - no-store
+            Pragma:
+              required: true
+              description: Cache rule for old HTTP/1.0 caches.
+              schema:
+                type: string
+                enum:
+                  - no-cache
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserCreated'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '409':
+          description: The request conflicts with the state of the resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '422':
+          description: The request is well formed, but the server cannot process its content.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableContent'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      x-required-scopes:
+        - identity:user:write
+    get:
+      operationId: Users_list
+      description: List the users.
+      parameters:
+        - $ref: '#/components/parameters/CursorPageParams.pageToken'
+        - $ref: '#/components/parameters/CursorPageParams.pageSize'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPage'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:user:read
+  /v1/users/{userId}:
+    get:
+      operationId: Users_get
+      description: Get one user.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:user:read
+    patch:
+      operationId: Users_update
+      description: 'Change the name or the disabled state of a user. Error code of `Conflict`: `last_admin`.'
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '409':
+          description: The request conflicts with the state of the resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdate'
+      x-required-scopes:
+        - identity:user:write
+  /v1/users/{userId}/invites:
+    post:
+      operationId: Invites_create
+      description: |-
+        Create a new invite for a user. An invite is only for a user with the status `invited`.
+        An invite does not reset the password of an `active` user.
+        Error codes of `Conflict`: `user_not_invited` (the user is `active`)
+        and `user_disabled` (the user is `disabled`, and this code wins over `user_not_invited`).
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          headers:
+            Cache-Control:
+              required: true
+              description: Cache rule.
+              schema:
+                type: string
+                enum:
+                  - no-store
+            Pragma:
+              required: true
+              description: Cache rule for old HTTP/1.0 caches.
+              schema:
+                type: string
+                enum:
+                  - no-cache
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invite'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '409':
+          description: The request conflicts with the state of the resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:user:write
+  /v1/users/{userId}/roles:
+    get:
+      operationId: UserRoles_list
+      description: List the roles of a user.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CursorPageParams.pageToken'
+        - $ref: '#/components/parameters/CursorPageParams.pageSize'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleAssignmentPage'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:role:read
+  /v1/users/{userId}/roles/{role}:
+    put:
+      operationId: UserRoles_assign
+      description: 'Give a role to a user. Error code of `UnprocessableContent`: `role_unknown`.'
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: role
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/RoleRef'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleAssignment'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '422':
+          description: The request is well formed, but the server cannot process its content.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableContent'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:role:assign
+    delete:
+      operationId: UserRoles_remove
+      description: 'Remove a role from a user. Error code of `Conflict`: `last_admin`.'
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: role
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/RoleRef'
+      responses:
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '409':
+          description: The request conflicts with the state of the resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:role:assign
+  /v1/users/{userId}/sessions:
+    get:
+      operationId: Sessions_list
+      description: List the sessions of a user.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CursorPageParams.pageToken'
+        - $ref: '#/components/parameters/CursorPageParams.pageSize'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionPage'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:session:read
+    delete:
+      operationId: Sessions_revokeAll
+      description: Revoke all sessions of a user.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:session:revoke
+security:
+  - BearerAuth: []
+components:
+  parameters:
+    CursorPageParams.pageSize:
+      name: pageSize
+      in: query
+      required: false
+      description: Maximum number of items in the page.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 200
+        default: 50
+      explode: false
+    CursorPageParams.pageToken:
+      name: pageToken
+      in: query
+      required: false
+      description: Opaque token from `nextPageToken` of the previous page.
+      schema:
+        type: string
+        maxLength: 1024
+      explode: false
+  schemas:
+    AppKey:
+      type: string
+      maxLength: 32
+      pattern: ^[a-z][a-z0-9_]*$
+      description: Key of an application, for example `helpdesk` or `customer_portal`.
+    AssignmentSource:
+      type: string
+      enum:
+        - config
+        - api
+      description: Where a role assignment comes from.
+    BadRequest:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The request is not valid.
+    Client:
+      type: object
+      required:
+        - id
+        - type
+        - app
+        - source
+        - name
+        - disabled
+      properties:
+        id:
+          type: string
+          description: ID of the client.
+        type:
+          allOf:
+            - $ref: '#/components/schemas/ClientType'
+          description: Type of the client.
+        app:
+          allOf:
+            - $ref: '#/components/schemas/AppKey'
+          description: Application of the client.
+        source:
+          allOf:
+            - $ref: '#/components/schemas/ClientSource'
+          description: Where the client comes from.
+        name:
+          type: string
+          description: Display name of the client.
+        redirectUris:
+          type: array
+          items:
+            type: string
+          description: Allowed redirect URIs. Public clients only.
+        postLogoutRedirectUris:
+          type: array
+          items:
+            type: string
+          description: Allowed post logout redirect URIs. Public clients only.
+        disabled:
+          type: boolean
+          description: True if the client is disabled.
+        keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClientKey'
+          description: Public keys. Service clients only.
+      description: |-
+        An OAuth client.
+        `app` is the audience of its tokens. A service client has the `app` of its service.
+        A public client has the `app` of the application that it signs users in to.
+    ClientCreate:
+      type: object
+      required:
+        - type
+        - app
+        - name
+      properties:
+        type:
+          allOf:
+            - $ref: '#/components/schemas/ClientType'
+          description: Type of the client.
+        app:
+          allOf:
+            - $ref: '#/components/schemas/AppKey'
+          description: Application of the client.
+        name:
+          type: string
+          description: Display name of the client.
+        redirectUris:
+          type: array
+          items:
+            type: string
+          description: Allowed redirect URIs. Public clients only.
+        postLogoutRedirectUris:
+          type: array
+          items:
+            type: string
+          description: Allowed post logout redirect URIs. Public clients only.
+        jwk:
+          allOf:
+            - $ref: '#/components/schemas/JsonWebKey'
+          description: Public key. Service clients only.
+      description: Request to create a client.
+    ClientKey:
+      type: object
+      required:
+        - kid
+        - jwk
+        - createdAt
+      properties:
+        kid:
+          type: string
+          description: ID of the key.
+        jwk:
+          allOf:
+            - $ref: '#/components/schemas/JsonWebKey'
+          description: The public key.
+        createdAt:
+          type: string
+          format: date-time
+          description: Time when the key was added.
+      description: A public key of a service client.
+    ClientPage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Client'
+          description: Items of the page.
+        nextPageToken:
+          type: string
+          description: Token for the next page. No value means that this is the last page.
+      description: One page of clients.
+    ClientSource:
+      type: string
+      enum:
+        - config
+        - api
+      description: Where a client comes from.
+    ClientType:
+      type: string
+      enum:
+        - service
+        - public
+      description: Type of a client.
+    ClientUpdate:
+      type: object
+      properties:
+        type:
+          allOf:
+            - $ref: '#/components/schemas/ClientType'
+          description: The type cannot change. A different value gives `client_type_immutable`.
+        name:
+          type: string
+          description: Display name of the client.
+        redirectUris:
+          type: array
+          items:
+            type: string
+          description: Allowed redirect URIs. Public clients only.
+        postLogoutRedirectUris:
+          type: array
+          items:
+            type: string
+          description: Allowed post logout redirect URIs. Public clients only.
+        disabled:
+          type: boolean
+          description: True to disable the client.
+      description: Request to change a client. A field that is not present does not change. It has no `app`, because the `app` of a client cannot change.
+    Conflict:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The request conflicts with the state of the resource.
+    DiscoveryDocument:
+      type: object
+      required:
+        - issuer
+        - authorization_endpoint
+        - token_endpoint
+        - jwks_uri
+        - userinfo_endpoint
+        - revocation_endpoint
+        - end_session_endpoint
+        - response_types_supported
+        - grant_types_supported
+        - subject_types_supported
+        - id_token_signing_alg_values_supported
+        - scopes_supported
+        - token_endpoint_auth_methods_supported
+        - token_endpoint_auth_signing_alg_values_supported
+        - code_challenge_methods_supported
+      properties:
+        issuer:
+          type: string
+          format: uri
+          description: Issuer URL.
+        authorization_endpoint:
+          type: string
+          format: uri
+          description: URL of the authorize endpoint.
+        token_endpoint:
+          type: string
+          format: uri
+          description: URL of the token endpoint.
+        jwks_uri:
+          type: string
+          format: uri
+          description: URL of the key set.
+        userinfo_endpoint:
+          type: string
+          format: uri
+          description: URL of the userinfo endpoint.
+        revocation_endpoint:
+          type: string
+          format: uri
+          description: URL of the revoke endpoint.
+        end_session_endpoint:
+          type: string
+          format: uri
+          description: URL of the end session endpoint.
+        response_types_supported:
+          type: array
+          items:
+            type: string
+          description: Supported response types.
+        grant_types_supported:
+          type: array
+          items:
+            type: string
+          description: Supported grant types.
+        subject_types_supported:
+          type: array
+          items:
+            type: string
+          description: Supported subject types.
+        id_token_signing_alg_values_supported:
+          type: array
+          items:
+            type: string
+          description: Supported algorithms of the ID token signature.
+        scopes_supported:
+          type: array
+          items:
+            type: string
+          description: Supported scopes.
+        token_endpoint_auth_methods_supported:
+          type: array
+          items:
+            type: string
+          description: Supported methods of client authentication.
+        token_endpoint_auth_signing_alg_values_supported:
+          type: array
+          items:
+            type: string
+          description: Supported algorithms of the client assertion signature.
+        code_challenge_methods_supported:
+          type: array
+          items:
+            type: string
+          description: Supported PKCE methods.
+      additionalProperties: {}
+      description: The OIDC discovery document. The model is open, so the service can add fields later.
+    FieldError:
+      type: object
+      required:
+        - field
+        - code
+        - message
+      properties:
+        field:
+          type: string
+          description: JSON Pointer to the incorrect value.
+        code:
+          type: string
+          description: Stable code that a machine can read.
+        message:
+          type: string
+          description: Message for a person.
+      description: One incorrect field of a request.
+    Forbidden:
+      type: object
+      properties:
+        missingScopes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PermissionKey'
+          description: Permissions that the principal lacks. An agent uses them to ask the user for approval.
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The principal does not have the permission.
+    GrantType:
+      anyOf:
+        - type: string
+          enum:
+            - client_credentials
+            - authorization_code
+            - refresh_token
+        - type: string
+      description: Grant type of a token request. The union is open, so a later release can add a grant type.
+    InternalServerError:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The server has an internal error.
+    Invite:
+      type: object
+      required:
+        - url
+        - expiresAt
+      properties:
+        url:
+          type: string
+          format: password
+          description: URL of the invite. It is a secret. The server shows it one time.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Time when the invite ends.
+      description: An invite that lets a user set up a sign-in.
+    JsonWebKey:
+      type: object
+      required:
+        - kty
+        - crv
+        - x
+        - 'y'
+        - kid
+      properties:
+        kty:
+          type: string
+          enum:
+            - EC
+          description: Key type.
+        crv:
+          type: string
+          enum:
+            - P-256
+          description: Curve.
+        x:
+          type: string
+          description: X coordinate in base64url form.
+        'y':
+          type: string
+          description: Y coordinate in base64url form.
+        kid:
+          type: string
+          description: ID of the key.
+        use:
+          type: string
+          enum:
+            - sig
+          description: Use of the key.
+        alg:
+          type: string
+          enum:
+            - ES256
+          description: Algorithm of the key.
+      additionalProperties:
+        not: {}
+      description: |-
+        A public EC P-256 key in JWK format (RFC 7517).
+        The model is closed. A private field such as `d`, `p`, `q`, `dp`, `dq`, `qi`, or `k` is not valid.
+    JsonWebKeySet:
+      type: object
+      required:
+        - keys
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/JsonWebKey'
+          description: The public keys.
+      description: A set of public keys in JWK format.
+    NoStoreHeaders:
+      type: object
+      description: |-
+        Response headers for a response that has a token, a secret, or personal data.
+        A cache must not keep the response (RFC 6749 section 5.1).
+    NotFound:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The resource does not exist.
+    OAuthError:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/OAuthErrorCode'
+          description: The error code.
+        error_description:
+          type: string
+          description: Text for a developer. It has no internal data and no secret.
+      description: |-
+        Error body of an OAuth operation (RFC 6749 section 5.2).
+        The status is 400, except for these codes. `invalid_client` is 401.
+        `server_error` is 500. `temporarily_unavailable` is 503.
+    OAuthErrorCode:
+      anyOf:
+        - type: string
+          enum:
+            - invalid_request
+            - invalid_client
+            - invalid_grant
+            - unauthorized_client
+            - unsupported_grant_type
+            - invalid_scope
+            - invalid_target
+            - unsupported_token_type
+            - temporarily_unavailable
+            - server_error
+        - type: string
+      description: Error code of an OAuth operation. The union is open.
+    PermissionDefinition:
+      type: object
+      required:
+        - key
+        - description
+      properties:
+        key:
+          allOf:
+            - $ref: '#/components/schemas/PermissionKey'
+          description: Key of the permission.
+        description:
+          type: string
+          description: Description of what the permission allows.
+      description: One permission that a service defines.
+    PermissionKey:
+      type: string
+      maxLength: 128
+      pattern: ^(?:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*|identity:admin)$
+      description: |-
+        Key of a permission in the form `<app>:<resource>:<action>`, for example `helpdesk:ticket:write`.
+        The only exception is `identity:admin`, the permission of full administration of the identity service.
+    PermissionManifest:
+      type: object
+      required:
+        - app
+        - permissions
+        - defaultRoles
+      properties:
+        app:
+          allOf:
+            - $ref: '#/components/schemas/AppKey'
+          description: Key of the application that owns the permissions.
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PermissionDefinition'
+          description: Permissions that the application defines.
+        defaultRoles:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleDefinition'
+          description: Default roles of the application.
+      description: The permissions and default roles that a service publishes.
+    Problem:
+      type: object
+      required:
+        - type
+        - title
+        - status
+        - code
+      properties:
+        type:
+          type: string
+          format: uri
+          description: URI reference that identifies the problem type.
+          default: about:blank
+        title:
+          type: string
+          description: Short summary of the problem. It contains no internal data.
+        status:
+          type: integer
+          format: int32
+          description: HTTP status code.
+        detail:
+          type: string
+          description: Explanation of this occurrence of the problem. It contains no internal data.
+        instance:
+          type: string
+          description: URI reference of this occurrence. It contains no personal data and no secret.
+        code:
+          type: string
+          maxLength: 64
+          description: Stable code that a machine can read, for example `ticket_not_found`.
+        requestId:
+          type: string
+          description: ID of the request. An operator uses it to find the error in the logs.
+        traceId:
+          type: string
+          description: ID of the trace. An operator uses it to find the error in the traces.
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldError'
+          description: Field errors. Only for validation errors.
+      description: Problem details for an HTTP API (RFC 9457).
+    PublishedManifest:
+      type: object
+      required:
+        - manifest
+        - version
+        - publishedAt
+      properties:
+        manifest:
+          allOf:
+            - $ref: '#/components/schemas/PermissionManifest'
+          description: The manifest.
+        version:
+          type: integer
+          format: int32
+          description: Version of the stored manifest. It increases with each change.
+        publishedAt:
+          type: string
+          format: date-time
+          description: Time of the last publish.
+      description: A permission manifest that the identity service stores.
+    PublishedManifestPage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublishedManifest'
+          description: Items of the page.
+        nextPageToken:
+          type: string
+          description: Token for the next page. No value means that this is the last page.
+      description: One page of manifests.
+    RequestScopeString:
+      type: string
+      maxLength: 4096
+      pattern: '^(?:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*|identity:admin|openid|profile|email|offline_access)(?: (?:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*|identity:admin|openid|profile|email|offline_access))*$'
+      description: |-
+        Space-separated scope values in a token request or an authorize request.
+        Each value is a permission key or one of `openid`, `profile`, `email`, and `offline_access`.
+    RevokeRequest:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          format: password
+          description: The token to revoke.
+        token_type_hint:
+          allOf:
+            - $ref: '#/components/schemas/TokenTypeHint'
+          description: Type of the token.
+        client_id:
+          type: string
+          description: ID of the client.
+        client_assertion_type:
+          type: string
+          description: Type of the client assertion.
+        client_assertion:
+          type: string
+          format: password
+          description: Signed JWT that authenticates a service client.
+      description: Form body of a revoke request (RFC 7009).
+    Role:
+      type: object
+      required:
+        - ref
+        - app
+        - key
+        - name
+        - description
+        - permissions
+      properties:
+        ref:
+          allOf:
+            - $ref: '#/components/schemas/RoleRef'
+          description: Reference of the role in the form `<app>:<role>`.
+        app:
+          allOf:
+            - $ref: '#/components/schemas/AppKey'
+          description: Application that owns the role.
+        key:
+          allOf:
+            - $ref: '#/components/schemas/RoleKey'
+          description: Key of the role in the application.
+        name:
+          type: string
+          description: Display name of the role.
+        description:
+          type: string
+          description: Description of the role.
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PermissionKey'
+          description: Permissions that the role grants.
+      description: A role from a manifest.
+    RoleAssignment:
+      type: object
+      required:
+        - role
+        - source
+        - pending
+      properties:
+        role:
+          allOf:
+            - $ref: '#/components/schemas/RoleRef'
+          description: The role.
+        source:
+          allOf:
+            - $ref: '#/components/schemas/AssignmentSource'
+          description: '`config` if the assignment is from a configuration file. `api` if it is from the API.'
+        pending:
+          type: boolean
+          description: True if the role is not in the current manifest of its app.
+      description: A role that a user or a client has.
+    RoleAssignmentPage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleAssignment'
+          description: Items of the page.
+        nextPageToken:
+          type: string
+          description: Token for the next page. No value means that this is the last page.
+      description: One page of role assignments.
+    RoleDefinition:
+      type: object
+      required:
+        - key
+        - name
+        - description
+        - permissions
+      properties:
+        key:
+          allOf:
+            - $ref: '#/components/schemas/RoleKey'
+          description: Key of the role.
+        name:
+          type: string
+          description: Display name of the role.
+        description:
+          type: string
+          description: Description of the role.
+        permissions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PermissionKey'
+          description: Permissions that the role grants.
+      description: A default role of a service, with its permissions.
+    RoleKey:
+      type: string
+      maxLength: 64
+      pattern: ^[a-z][a-z0-9_]*$
+      description: Key of a role, for example `agent_admin`.
+    RolePage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Role'
+          description: Items of the page.
+        nextPageToken:
+          type: string
+          description: Token for the next page. No value means that this is the last page.
+      description: One page of roles.
+    RoleRef:
+      type: string
+      maxLength: 97
+      pattern: ^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$
+      description: Reference to a role in the form `<app>:<role>`, for example `helpdesk:agent`.
+    ScopeString:
+      type: string
+      maxLength: 4096
+      pattern: '^(?:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*|identity:admin)(?: (?:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*|identity:admin))*$'
+      description: |-
+        Space-separated permission keys, for example `helpdesk:ticket:read helpdesk:ticket:write`.
+        It holds permission keys only. It never holds an OIDC scope.
+    ServiceUnavailable:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The service is not available.
+    Session:
+      type: object
+      required:
+        - id
+        - userId
+        - createdAt
+        - lastSeenAt
+        - expiresAt
+      properties:
+        id:
+          type: string
+          description: ID of the session.
+        userId:
+          type: string
+          description: ID of the user.
+        createdAt:
+          type: string
+          format: date-time
+          description: Time when the session started.
+        lastSeenAt:
+          type: string
+          format: date-time
+          description: Time of the last use of the session.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Time when the session ends.
+        userAgent:
+          type: string
+          description: User agent of the browser.
+        ipAddress:
+          type: string
+          description: IP address of the last request.
+      description: A sign-in session of a user.
+    SessionPage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Session'
+          description: Items of the page.
+        nextPageToken:
+          type: string
+          description: Token for the next page. No value means that this is the last page.
+      description: One page of sessions.
+    TokenRequest:
+      type: object
+      required:
+        - grant_type
+      properties:
+        grant_type:
+          allOf:
+            - $ref: '#/components/schemas/GrantType'
+          description: The grant type.
+        client_id:
+          type: string
+          description: ID of the client.
+        client_assertion_type:
+          type: string
+          description: Type of the client assertion. For a service client it is `urn:ietf:params:oauth:client-assertion-type:jwt-bearer`.
+        client_assertion:
+          type: string
+          format: password
+          description: Signed JWT (`private_key_jwt`) that authenticates a service client.
+        scope:
+          allOf:
+            - $ref: '#/components/schemas/RequestScopeString'
+          description: Requested scopes.
+        audience:
+          allOf:
+            - $ref: '#/components/schemas/AppKey'
+          description: Application key of the audience of the access token.
+        code:
+          type: string
+          format: password
+          description: Authorization code. For the grant `authorization_code`.
+        code_verifier:
+          type: string
+          format: password
+          description: PKCE code verifier. For the grant `authorization_code`.
+        redirect_uri:
+          type: string
+          description: Redirect URI of the authorize request. For the grant `authorization_code`.
+        refresh_token:
+          type: string
+          format: password
+          description: Refresh token. For the grant `refresh_token`.
+      description: Form body of a token request. The OAuth field names are in snake case, as RFC 6749 requires.
+    TokenResponse:
+      type: object
+      required:
+        - access_token
+        - token_type
+        - expires_in
+        - scope
+      properties:
+        access_token:
+          type: string
+          format: password
+          description: The access token.
+        token_type:
+          type: string
+          enum:
+            - Bearer
+          description: Type of the token.
+        expires_in:
+          type: integer
+          format: int32
+          description: Lifetime of the access token in seconds.
+        scope:
+          allOf:
+            - $ref: '#/components/schemas/ScopeString'
+          description: Permission keys that the access token grants. It has no OIDC scope.
+        refresh_token:
+          type: string
+          format: password
+          description: Refresh token. Present if the request had the scope `offline_access`.
+        id_token:
+          type: string
+          format: password
+          description: ID token. Present if the request had the scope `openid`.
+      description: Result of a successful token request.
+    TokenTypeHint:
+      anyOf:
+        - type: string
+          enum:
+            - refresh_token
+            - access_token
+        - type: string
+      description: Type hint of a token in a revoke request. The union is open.
+    TooManyRequests:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The client sent too many requests.
+    Unauthorized:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The request has no valid credentials.
+    UnprocessableContent:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The request is well formed, but the server cannot process its content.
+    User:
+      type: object
+      required:
+        - id
+        - email
+        - name
+        - status
+        - createdAt
+      properties:
+        id:
+          type: string
+          description: ID of the user.
+        email:
+          type: string
+          description: Email address of the user.
+        name:
+          type: string
+          description: Display name of the user.
+        status:
+          allOf:
+            - $ref: '#/components/schemas/UserStatus'
+          description: Status of the user.
+        createdAt:
+          type: string
+          format: date-time
+          description: Time when the user was created.
+      description: A user.
+    UserCreate:
+      type: object
+      required:
+        - email
+        - name
+      properties:
+        email:
+          type: string
+          description: Email address of the user.
+        name:
+          type: string
+          description: Display name of the user.
+      description: Request to create a user.
+    UserCreated:
+      type: object
+      required:
+        - user
+        - invite
+      properties:
+        user:
+          allOf:
+            - $ref: '#/components/schemas/User'
+          description: The new user.
+        invite:
+          allOf:
+            - $ref: '#/components/schemas/Invite'
+          description: The invite of the new user.
+      description: Result of the creation of a user.
+    UserInfo:
+      type: object
+      required:
+        - sub
+      properties:
+        sub:
+          type: string
+          description: ID of the user.
+        email:
+          type: string
+          description: Email address of the user.
+        email_verified:
+          type: boolean
+          description: True if the email address is verified.
+        name:
+          type: string
+          description: Display name of the user.
+      description: Claims of the userinfo endpoint.
+    UserPage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+          description: Items of the page.
+        nextPageToken:
+          type: string
+          description: Token for the next page. No value means that this is the last page.
+      description: One page of users.
+    UserStatus:
+      type: string
+      enum:
+        - invited
+        - active
+        - disabled
+      description: Status of a user.
+    UserUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Display name of the user.
+        disabled:
+          type: boolean
+          description: True to disable the user. False to enable the user.
+      description: Request to change a user. A field that is not present does not change.
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: Bearer

@@ -171,6 +171,13 @@ Values of `outcome` of `retention.duration`:
 | ------ | ---- | ---- | ---------- | ------- |
 | `constellation.auth.verify` | Counter | `{verification}` | `outcome` (`ok`, `no_token`, `invalid`, `expired`, `wrong_issuer`, `wrong_audience`, `keys_unavailable`) | One count for each request that `auth.Middleware` verifies. |
 | `constellation.auth.jwks.fetch` | Counter | `{fetch}` | `outcome` (`ok`, `http_error`, `bad_body`, `too_large`, `no_keys`, `network_error`) | One count for each JWKS fetch of `auth/jwt`. |
+| `constellation.auth.token.request` | Counter | `{request}` | `outcome` (`ok`, `oauth_error`, `unavailable`, `bad_response`, `network_error`) | One count for each token request of `auth/clientcred`. A cache hit makes no request and is not counted. |
+
+### Manifest metrics
+
+| Metric | Type | Unit | Attributes | Meaning |
+| ------ | ---- | ---- | ---------- | ------- |
+| `constellation.manifest.publish` | Counter | `{attempt}` | `outcome` (`ok`, `invalid`, `rejected`, `denied`, `unavailable`) | One count for each publish attempt of the `manifest` publisher. An alert on `denied` shows a wrong client config. An alert on `invalid` shows a wrong manifest. An alert on `rejected` shows a fixed 4xx refusal of the registry. |
 
 An alert on a high rate of `keys_unavailable` or of `network_error` shows that the service cannot reach the identity service. An alert on a high rate of `wrong_audience` can show a client that calls the wrong service.
 
@@ -180,7 +187,15 @@ An alert on a high rate of `keys_unavailable` or of `network_error` shows that t
 - Never read the principal from a header or from baggage. The principal comes only from a token that `auth.Middleware` verified.
 - Each service checks the audience and the scopes of each request. Use `auth.Middleware` with the `AppKey` of the service as the audience, and `auth.RequireScopes` on each route.
 - The order of the middleware is `requestid.Middleware`, then `auth.Middleware`, then `auth.RequireScopes` for each route.
-- Only `auth/jwt` and the test issuer import the JOSE library. A `depguard` rule keeps it out of `auth` and `requestid`.
+- Only `auth/jwt`, `auth/clientcred`, and the test issuer import the JOSE library. A `depguard` rule keeps it out of `auth` and `requestid`.
+- Never log a private key, an assertion, or a token. Never put one in a span attribute, a metric attribute, or an error text.
+
+## Generated code
+
+- The generated identity client is `clients/identity/identity.gen.go`. It comes from `api/openapi/Constellation.Identity.openapi.yaml`, a copy of a file of a `constellation-contracts` release tag. The tag is in `api/openapi/CONTRACTS_VERSION`.
+- Never change a generated file or the OpenAPI copy by hand. A change goes into `constellation-contracts` first.
+- CI runs `go generate ./... && git diff --exit-code` before the unit tests. A stale generated file fails the CI.
+- The linters skip files with the `Code generated` header. Only `clients/identity` can import the `oapi-codegen` runtime. A `depguard` rule enforces it.
 
 ## Executors and decorators
 

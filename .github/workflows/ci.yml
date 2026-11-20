@@ -9,4 +9,6 @@ jobs:
   go:
     uses: techorionai/constellation-ci/.github/workflows/go.yml@v0.1.0
     with:
+      # The generated identity client must be current.
+      unit-command: go generate ./... && git diff --exit-code && go test -race ./...
       integration-command: go test -race -tags=integration ./...
