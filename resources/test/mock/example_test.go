@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/techorionai/constellation-platform-go/auth"
 	"github.com/techorionai/constellation-platform-go/cache"
 	"github.com/techorionai/constellation-platform-go/migrate"
 	"github.com/techorionai/constellation-platform-go/resources/test/mock"
@@ -68,4 +69,13 @@ func ExampleRetentionPurger() {
 	n, err := runner.RunOnce(context.Background(), "events")
 	fmt.Println(n, err, purger.PurgeCalls())
 	// Output: 3 <nil> 1
+}
+
+func ExampleVerifier() {
+	v := &mock.Verifier{VerifyFunc: func(context.Context, string) (auth.Principal, error) {
+		return auth.Principal{ID: "u1"}, nil
+	}}
+	p, err := v.Verify(context.Background(), "token")
+	fmt.Println(p.ID, err, v.VerifyCalls())
+	// Output: u1 <nil> 1
 }

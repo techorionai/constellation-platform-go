@@ -10,7 +10,8 @@ import (
 
 // handler sends each record to all child handlers. It adds trace_id and
 // span_id at the top level of the record when the context has an active span,
-// also for a logger that used WithGroup. The children get only the records at
+// also for a logger that used WithGroup. It adds the attributes of
+// ContextWithAttrs in the same way. The children get only the records at
 // or above the level.
 //
 // The children never get WithAttrs or WithGroup calls. The handler keeps these
@@ -36,7 +37,8 @@ func (h *handler) Enabled(_ context.Context, l slog.Level) bool { return l >= h.
 
 func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 	sc := trace.SpanContextFromContext(ctx)
-	if len(h.ops) > 0 || sc.IsValid() {
+	ctxAttrs := attrsFromContext(ctx)
+	if len(h.ops) > 0 || sc.IsValid() || len(ctxAttrs) > 0 {
 		nr := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
 		var top []slog.Attr
 		if sc.IsValid() {
@@ -45,6 +47,7 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 				slog.String("span_id", sc.SpanID().String()),
 			)
 		}
+		top = append(top, ctxAttrs...)
 		nr.AddAttrs(append(top, h.nest(r)...)...)
 		r = nr
 	}

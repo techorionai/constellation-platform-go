@@ -5,6 +5,7 @@ go 1.27.4
 require (
 	github.com/caarlos0/env/v11 v11.4.2
 	github.com/exaring/otelpgx v0.13.0
+	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.13.0
@@ -24,6 +25,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
 	go.opentelemetry.io/proto/otlp v1.11.1
+	go.uber.org/goleak v1.3.0
 	golang.org/x/sync v0.24.0
 	google.golang.org/protobuf v1.36.12
 )
