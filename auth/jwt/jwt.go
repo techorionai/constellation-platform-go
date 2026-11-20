@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -50,6 +52,31 @@ type Config struct {
 	Leeway time.Duration `env:"LEEWAY" envDefault:"30s"`
 	// HTTPTimeout is the time limit of one JWKS fetch.
 	HTTPTimeout time.Duration `env:"HTTP_TIMEOUT" envDefault:"5s"`
+	// AllowInsecureHTTP allows the scheme http for Issuer and JWKSURL. Use it
+	// only for local compose and tests. A service must not set it in production.
+	AllowInsecureHTTP bool `env:"ALLOW_INSECURE_HTTP" envDefault:"false"`
+}
+
+// maxLeeway is the largest Leeway that New accepts.
+const maxLeeway = 2 * time.Minute
+
+// checkURL returns an error if the URL does not use https. With allowHTTP it
+// also accepts http.
+func checkURL(name, raw string, allowHTTP bool) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("auth/jwt: %s is not a valid URL: %w", name, err)
+	}
+	switch {
+	case u.Scheme == "https":
+	case u.Scheme == "http" && allowHTTP:
+	default:
+		return fmt.Errorf("auth/jwt: %s must use https (set AUTH__ALLOW_INSECURE_HTTP only for local use)", name)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("auth/jwt: %s has no host", name)
+	}
+	return nil
 }
 
 func (c Config) withDefaults() (Config, error) {
@@ -62,13 +89,22 @@ func (c Config) withDefaults() (Config, error) {
 	if c.JWKSURL == "" {
 		c.JWKSURL = strings.TrimRight(c.Issuer, "/") + "/.well-known/jwks.json"
 	}
+	if err := checkURL("Issuer (AUTH__ISSUER)", c.Issuer, c.AllowInsecureHTTP); err != nil {
+		return c, err
+	}
+	if err := checkURL("JWKSURL (AUTH__JWKS_URL)", c.JWKSURL, c.AllowInsecureHTTP); err != nil {
+		return c, err
+	}
+	if c.Leeway < 0 || c.Leeway > maxLeeway {
+		return c, errors.New("auth/jwt: Leeway (AUTH__LEEWAY) must be between 0 and 2m")
+	}
 	if c.RefreshInterval <= 0 {
 		c.RefreshInterval = 10 * time.Minute
 	}
 	if c.MinRefetchInterval <= 0 {
 		c.MinRefetchInterval = 30 * time.Second
 	}
-	if c.Leeway <= 0 {
+	if c.Leeway == 0 {
 		c.Leeway = 30 * time.Second
 	}
 	if c.HTTPTimeout <= 0 {
@@ -81,7 +117,8 @@ func (c Config) withDefaults() (Config, error) {
 type Option func(*Verifier)
 
 // WithHTTPClient sets the HTTP client that fetches the JWKS. The default client
-// uses HTTPTimeout.
+// uses HTTPTimeout. The verifier uses a copy of the client that does not follow
+// redirects.
 func WithHTTPClient(c *http.Client) Option { return func(v *Verifier) { v.client = c } }
 
 // WithClock sets the clock of the verifier. The default is time.Now. A test uses
@@ -109,11 +146,11 @@ type Verifier struct {
 	keys        keySet
 	lastAttempt time.Time
 
-	lifeMu    sync.Mutex
-	started   bool
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	closeOnce sync.Once
+	lifeMu  sync.Mutex
+	started bool
+	closed  bool
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
 }
 
 // New makes a verifier. It does not fetch the JWKS.
@@ -128,7 +165,12 @@ func New(cfg Config, opts ...Option) (*Verifier, error) {
 	}
 	if v.client == nil {
 		v.client = &http.Client{Timeout: cfg.HTTPTimeout}
+	} else {
+		c := *v.client
+		v.client = &c
 	}
+	// The fetch never follows a redirect. A redirect response is a failed fetch.
+	v.client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	v.tick = min(cfg.RefreshInterval, time.Second)
 	v.fetches, _ = v.meterProvider.Meter(scopeName).Int64Counter("constellation.auth.jwks.fetch",
 		metric.WithUnit("{fetch}"),
@@ -139,11 +181,11 @@ func New(cfg Config, opts ...Option) (*Verifier, error) {
 // Start starts the background refresh. It refreshes the key set every
 // RefreshInterval until ctx ends or [Verifier.Close] runs. Start is optional.
 // Without it, the cache refreshes only when a token has an unknown key ID. A
-// second call does nothing.
+// second call does nothing. Start after [Verifier.Close] does nothing.
 func (v *Verifier) Start(ctx context.Context) {
 	v.lifeMu.Lock()
 	defer v.lifeMu.Unlock()
-	if v.started {
+	if v.started || v.closed {
 		return
 	}
 	v.started = true
@@ -165,7 +207,7 @@ func (v *Verifier) loop(ctx context.Context) {
 			last := v.lastAttempt
 			v.mu.RUnlock()
 			if last.IsZero() || v.now().Sub(last) >= v.cfg.RefreshInterval {
-				v.refresh(ctx, true)
+				_, _ = v.refresh(ctx, true, false)
 			}
 		}
 	}
@@ -174,15 +216,14 @@ func (v *Verifier) loop(ctx context.Context) {
 // Close stops the background refresh and waits for it. A second call does
 // nothing. Verify still works after Close with the cached keys.
 func (v *Verifier) Close() {
-	v.closeOnce.Do(func() {
-		v.lifeMu.Lock()
-		cancel := v.cancel
-		v.lifeMu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
-		v.wg.Wait()
-	})
+	v.lifeMu.Lock()
+	v.closed = true
+	cancel := v.cancel
+	v.lifeMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	v.wg.Wait()
 }
 
 func errKeysUnavailable() error {
@@ -194,19 +235,93 @@ func invalid(reason string) error {
 }
 
 type claims struct {
-	Iss           string          `json:"iss"`
-	Sub           string          `json:"sub"`
-	Aud           json.RawMessage `json:"aud"`
-	Exp           *float64        `json:"exp"`
-	Nbf           *float64        `json:"nbf"`
-	Iat           *float64        `json:"iat"`
-	ClientID      string          `json:"client_id"`
-	PrincipalType string          `json:"principal_type"`
-	Scope         string          `json:"scope"`
-	Act           *struct {
-		Sub           string `json:"sub"`
-		PrincipalType string `json:"principal_type"`
-	} `json:"act"`
+	Iss           string
+	Sub           string
+	Aud           json.RawMessage
+	Exp           *float64
+	Nbf           *float64
+	Iat           *float64
+	ClientID      string
+	PrincipalType string
+	Scope         string
+	Act           *actClaim
+}
+
+type actClaim struct {
+	Sub           string
+	PrincipalType string
+}
+
+// claimReader reads claims by their exact names. The decoder of encoding/json
+// matches names without case, so the verifier does not use it on a struct.
+type claimReader struct {
+	m   map[string]json.RawMessage
+	bad bool
+}
+
+func newClaimReader(payload []byte) (*claimReader, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &m); err != nil || m == nil {
+		return nil, invalid("claims")
+	}
+	return &claimReader{m: m}, nil
+}
+
+func (r *claimReader) raw(name string) (json.RawMessage, bool) {
+	raw, ok := r.m[name]
+	if !ok || string(raw) == "null" {
+		return nil, false
+	}
+	return raw, true
+}
+
+func (r *claimReader) str(name string) string {
+	raw, ok := r.raw(name)
+	if !ok {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		r.bad = true
+	}
+	return s
+}
+
+func (r *claimReader) num(name string) *float64 {
+	raw, ok := r.raw(name)
+	if !ok {
+		return nil
+	}
+	var n float64
+	if err := json.Unmarshal(raw, &n); err != nil {
+		r.bad = true
+		return nil
+	}
+	return &n
+}
+
+func parseClaims(payload []byte) (claims, error) {
+	r, err := newClaimReader(payload)
+	if err != nil {
+		return claims{}, err
+	}
+	c := claims{
+		Iss: r.str("iss"), Sub: r.str("sub"), Exp: r.num("exp"), Nbf: r.num("nbf"), Iat: r.num("iat"),
+		ClientID: r.str("client_id"), PrincipalType: r.str("principal_type"), Scope: r.str("scope"),
+	}
+	c.Aud, _ = r.raw("aud")
+	if raw, ok := r.raw("act"); ok {
+		a, err := newClaimReader(raw)
+		if err != nil {
+			return claims{}, invalid("act")
+		}
+		c.Act = &actClaim{Sub: a.str("sub"), PrincipalType: a.str("principal_type")}
+		r.bad = r.bad || a.bad
+	}
+	if r.bad {
+		return claims{}, invalid("claims")
+	}
+	return c, nil
 }
 
 // Verify checks the token and returns the principal. The error wraps one of the
@@ -241,9 +356,9 @@ func (v *Verifier) Verify(ctx context.Context, token string) (auth.Principal, er
 	if err != nil {
 		return auth.Principal{}, invalid("signature")
 	}
-	var c claims
-	if err := json.Unmarshal(payload, &c); err != nil {
-		return auth.Principal{}, invalid("claims")
+	c, err := parseClaims(payload)
+	if err != nil {
+		return auth.Principal{}, err
 	}
 	return v.principal(c)
 }
@@ -258,15 +373,31 @@ func (v *Verifier) principal(c claims) (auth.Principal, error) {
 	if c.Exp == nil {
 		return auth.Principal{}, invalid("exp missing")
 	}
+	exp, ok := unixTime(*c.Exp)
+	if !ok {
+		return auth.Principal{}, invalid("exp out of range")
+	}
 	now := v.now()
-	if !unixTime(*c.Exp).After(now.Add(-v.cfg.Leeway)) {
+	if !exp.After(now.Add(-v.cfg.Leeway)) {
 		return auth.Principal{}, fmt.Errorf("auth/jwt: exp: %w", auth.ErrExpired)
 	}
-	if c.Nbf != nil && unixTime(*c.Nbf).After(now.Add(v.cfg.Leeway)) {
-		return auth.Principal{}, invalid("nbf in the future")
+	if c.Nbf != nil {
+		nbf, ok := unixTime(*c.Nbf)
+		if !ok {
+			return auth.Principal{}, invalid("nbf out of range")
+		}
+		if nbf.After(now.Add(v.cfg.Leeway)) {
+			return auth.Principal{}, invalid("nbf in the future")
+		}
 	}
-	if c.Iat != nil && unixTime(*c.Iat).After(now.Add(v.cfg.Leeway)) {
-		return auth.Principal{}, invalid("iat in the future")
+	if c.Iat != nil {
+		iat, ok := unixTime(*c.Iat)
+		if !ok {
+			return auth.Principal{}, invalid("iat out of range")
+		}
+		if iat.After(now.Add(v.cfg.Leeway)) {
+			return auth.Principal{}, invalid("iat in the future")
+		}
 	}
 	ptype := auth.PrincipalType(c.PrincipalType)
 	if c.Sub == "" || c.ClientID == "" || !ptype.Valid() {
@@ -289,9 +420,20 @@ func (v *Verifier) principal(c claims) (auth.Principal, error) {
 	return p, nil
 }
 
-func unixTime(f float64) time.Time {
+// Range of a time claim: the years 1 to 9999.
+const (
+	minUnix = -62135596800
+	maxUnix = 253402300799
+)
+
+// unixTime converts a time claim. It reports false for a value that is not
+// finite or not in the years 1 to 9999.
+func unixTime(f float64) (time.Time, bool) {
+	if math.IsNaN(f) || math.IsInf(f, 0) || f < minUnix || f > maxUnix {
+		return time.Time{}, false
+	}
 	sec := int64(f)
-	return time.Unix(sec, int64((f-float64(sec))*1e9))
+	return time.Unix(sec, int64((f-float64(sec))*1e9)), true
 }
 
 // audienceMatches reports whether aud is the string want, or an array that

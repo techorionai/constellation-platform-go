@@ -63,7 +63,7 @@ func newFixture(t *testing.T, opts ...authjwt.Option) *fixture {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	all := append([]authjwt.Option{authjwt.WithClock(clock.Now), authjwt.WithMeterProvider(mp)}, opts...)
-	v, err := authjwt.New(authjwt.Config{Issuer: iss.Issuer(), Audience: audience, JWKSURL: iss.URL()}, all...)
+	v, err := authjwt.New(authjwt.Config{Issuer: iss.Issuer(), Audience: audience, JWKSURL: iss.URL(), AllowInsecureHTTP: true}, all...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestUnknownKidInsideMinRefetch(t *testing.T) {
 	f.mustVerify(t, issuer.Claims{})
 	before := f.iss.Fetches()
 	_, err := f.verify(t, issuer.Claims{SigningKey: issuer.GenerateKey(t), Kid: "unknown"})
-	wantErr(t, err, auth.ErrInvalidToken)
+	wantErr(t, err, auth.ErrKeysUnavailable)
 	if got := f.iss.Fetches() - before; got != 0 {
 		t.Errorf("fetches = %d, want 0", got)
 	}
@@ -302,13 +302,18 @@ func TestKeyRotation(t *testing.T) {
 func TestUnknownKidFlood(t *testing.T) {
 	f := newFixture(t)
 	f.mustVerify(t, issuer.Claims{})
+	f.clock.Advance(31 * time.Second)
 	key := issuer.GenerateKey(t)
 	for i := 0; i < 50; i++ {
 		_, err := f.verify(t, issuer.Claims{SigningKey: key, Kid: fmt.Sprintf("rand-%d", i)})
-		wantErr(t, err, auth.ErrInvalidToken)
+		if i == 0 {
+			wantErr(t, err, auth.ErrInvalidToken)
+		} else {
+			wantErr(t, err, auth.ErrKeysUnavailable)
+		}
 	}
-	if got := f.iss.Fetches(); got > 1 {
-		t.Errorf("fetches = %d, want at most 1", got)
+	if got := f.iss.Fetches(); got > 2 {
+		t.Errorf("fetches = %d, want at most 2 (one first fetch, one refetch)", got)
 	}
 }
 
@@ -429,10 +434,12 @@ func TestIgnoredKeys(t *testing.T) {
 
 	f.mustVerify(t, issuer.Claims{})
 	for kid, k := range map[string]*ecdsa.PrivateKey{"enc-key": encKey, "priv-key": privKey} {
+		f.clock.Advance(31 * time.Second)
 		_, err := f.verify(t, issuer.Claims{SigningKey: k, Kid: kid})
 		wantErr(t, err, auth.ErrInvalidToken)
 	}
 	for _, kid := range []string{"rsa-key", "p384-key"} {
+		f.clock.Advance(31 * time.Second)
 		_, err := f.verify(t, issuer.Claims{SigningKey: issuer.GenerateKey(t), Kid: kid})
 		wantErr(t, err, auth.ErrInvalidToken)
 	}
@@ -449,6 +456,7 @@ func TestRemovedKeyStopsWorking(t *testing.T) {
 	// An unknown kid starts the refresh that replaces the key set.
 	_, err := f.verify(t, issuer.Claims{SigningKey: issuer.GenerateKey(t), Kid: "unknown"})
 	wantErr(t, err, auth.ErrInvalidToken)
+	f.clock.Advance(31 * time.Second)
 	_, err = f.verify(t, issuer.Claims{Kid: key1})
 	wantErr(t, err, auth.ErrInvalidToken)
 	f.mustVerify(t, issuer.Claims{}) // the new key still works
@@ -489,7 +497,7 @@ func TestConfig(t *testing.T) {
 
 	// The default JWKS URL is <Issuer>/.well-known/jwks.json.
 	iss := issuer.New(t)
-	v, err := authjwt.New(authjwt.Config{Issuer: iss.Issuer(), Audience: audience})
+	v, err := authjwt.New(authjwt.Config{Issuer: iss.Issuer(), Audience: audience, AllowInsecureHTTP: true})
 	if err != nil {
 		t.Fatal(err)
 	}

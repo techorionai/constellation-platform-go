@@ -15,6 +15,8 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+
+	"github.com/techorionai/constellation-platform-go/auth"
 )
 
 // maxJWKSBytes is the largest JWKS body that the verifier accepts.
@@ -41,35 +43,48 @@ func (v *Verifier) currentKeys() keySet {
 }
 
 // refresh fetches the JWKS. If force is false, it does nothing when the last
-// attempt is more recent than MinRefetchInterval. Concurrent calls share one
-// fetch.
-func (v *Verifier) refresh(ctx context.Context, force bool) {
-	_, _, _ = v.group.Do("jwks", func() (any, error) {
+// attempt is more recent than MinRefetchInterval, and it reports blocked.
+// Concurrent calls share one fetch. If detach is true, the fetch does not end
+// when ctx ends, because other callers share the result. In both cases refresh
+// returns the error of ctx when ctx ends before the fetch ends.
+func (v *Verifier) refresh(ctx context.Context, force, detach bool) (blocked bool, err error) {
+	ch := v.group.DoChan("jwks", func() (any, error) {
 		now := v.now()
 		v.mu.Lock()
 		if !force && !v.lastAttempt.IsZero() && now.Sub(v.lastAttempt) < v.cfg.MinRefetchInterval {
 			v.mu.Unlock()
-			return nil, nil
+			return true, nil
 		}
 		v.lastAttempt = now
 		v.mu.Unlock()
 
-		// The fetch does not end when the context of the first caller ends,
-		// because other callers share the result.
-		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), v.cfg.HTTPTimeout)
+		fctx := ctx
+		if detach {
+			fctx = context.WithoutCancel(ctx)
+		}
+		fctx, cancel := context.WithTimeout(fctx, v.cfg.HTTPTimeout)
 		defer cancel()
 		keys, outcome, err := v.fetch(fctx)
-		v.fetches.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+		v.fetches.Add(context.WithoutCancel(ctx), 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 		if err != nil {
-			slog.WarnContext(ctx, "auth/jwt: JWKS fetch failed",
-				slog.String("outcome", outcome), slog.Any("error", err))
-			return nil, nil
+			if detach || ctx.Err() == nil {
+				slog.WarnContext(context.WithoutCancel(ctx), "auth/jwt: JWKS fetch failed",
+					slog.String("outcome", outcome), slog.Any("error", err))
+			}
+			return false, nil
 		}
 		v.mu.Lock()
 		v.keys = keys
 		v.mu.Unlock()
-		return nil, nil
+		return false, nil
 	})
+	select {
+	case res := <-ch:
+		b, _ := res.Val.(bool)
+		return b, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
 }
 
 func (v *Verifier) fetch(ctx context.Context) (keySet, string, error) {
@@ -143,11 +158,14 @@ func parseJWKS(body []byte) (keySet, error) {
 }
 
 // lookup returns the key for a key ID. An unknown ID starts a refetch if the
-// rate limit permits it.
+// rate limit permits it. If the rate limit blocks the refetch, the result is
+// [auth.ErrKeysUnavailable], so the client can retry.
 func (v *Verifier) lookup(ctx context.Context, kid string) (*ecdsa.PublicKey, error) {
 	keys := v.currentKeys()
 	if len(keys) == 0 {
-		v.refresh(ctx, false)
+		if _, err := v.refresh(ctx, false, true); err != nil {
+			return nil, fmt.Errorf("auth/jwt: wait for keys: %w: %w", auth.ErrKeysUnavailable, err)
+		}
 		keys = v.currentKeys()
 		if len(keys) == 0 {
 			return nil, errKeysUnavailable()
@@ -156,9 +174,15 @@ func (v *Verifier) lookup(ctx context.Context, kid string) (*ecdsa.PublicKey, er
 	if k, ok := keys[kid]; ok {
 		return k, nil
 	}
-	v.refresh(ctx, false)
+	blocked, err := v.refresh(ctx, false, true)
+	if err != nil {
+		return nil, fmt.Errorf("auth/jwt: wait for keys: %w: %w", auth.ErrKeysUnavailable, err)
+	}
 	if k, ok := v.currentKeys()[kid]; ok {
 		return k, nil
+	}
+	if blocked {
+		return nil, fmt.Errorf("auth/jwt: unknown kid and the refetch rate limit is active: %w", auth.ErrKeysUnavailable)
 	}
 	return nil, nil
 }
