@@ -21,4 +21,6 @@
 //
 //	IDENTITY__URL      base URL of the identity service, required
 //	IDENTITY__TIMEOUT  time limit of one request, default 10s
+//	IDENTITY__ALLOW_INSECURE_HTTP
+//	                   allows the scheme http for the URL, default false
 package identity

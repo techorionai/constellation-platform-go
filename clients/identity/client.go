@@ -3,6 +3,7 @@ package identity
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -26,7 +27,54 @@ type Config struct {
 	URL string `env:"URL,required"`
 	// Timeout is the time limit of one request. It includes the token request.
 	Timeout time.Duration `env:"TIMEOUT" envDefault:"10s"`
+	// AllowInsecureHTTP allows the scheme http for URL. Use it only for local
+	// compose and tests. A service must not set it in production.
+	AllowInsecureHTTP bool `env:"ALLOW_INSECURE_HTTP" envDefault:"false"`
 }
+
+// maxResponseBytes is the largest response body that the client reads.
+const maxResponseBytes = 1 << 20
+
+// ErrResponseTooLarge is the error of a response body above the limit.
+var ErrResponseTooLarge = errors.New("clients/identity: response body is too large")
+
+// limitTransport limits the size of each response body.
+type limitTransport struct{ base http.RoundTripper }
+
+func (t limitTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.ContentLength > maxResponseBytes {
+		_ = resp.Body.Close()
+		return nil, ErrResponseTooLarge
+	}
+	resp.Body = &limitBody{rc: resp.Body, left: maxResponseBytes}
+	return resp, nil
+}
+
+type limitBody struct {
+	rc   io.ReadCloser
+	left int64
+}
+
+func (b *limitBody) Read(p []byte) (int, error) {
+	if b.left < 0 {
+		return 0, ErrResponseTooLarge
+	}
+	if int64(len(p)) > b.left+1 {
+		p = p[:b.left+1]
+	}
+	n, err := b.rc.Read(p)
+	b.left -= int64(n)
+	if b.left < 0 {
+		return 0, ErrResponseTooLarge
+	}
+	return n, err
+}
+
+func (b *limitBody) Close() error { return b.rc.Close() }
 
 // Option changes the behavior of [New].
 type Option func(*options)
@@ -68,6 +116,9 @@ func New(cfg Config, ts auth.TokenSource, scopes []string, opts ...Option) (*Cli
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return nil, errors.New("clients/identity: URL (IDENTITY__URL) is not a valid http or https URL")
 	}
+	if u.Scheme == "http" && !cfg.AllowInsecureHTTP {
+		return nil, errors.New("clients/identity: URL (IDENTITY__URL) must use https (set IDENTITY__ALLOW_INSECURE_HTTP only for local use)")
+	}
 	if ts == nil {
 		return nil, errors.New("clients/identity: token source is required")
 	}
@@ -75,11 +126,8 @@ func New(cfg Config, ts auth.TokenSource, scopes []string, opts ...Option) (*Cli
 	if len(scopes) == 0 {
 		return nil, errors.New("clients/identity: at least one scope is required")
 	}
-	if cfg.Timeout < 0 {
+	if cfg.Timeout <= 0 {
 		return nil, errors.New("clients/identity: Timeout (IDENTITY__TIMEOUT) must be more than 0")
-	}
-	if cfg.Timeout == 0 {
-		cfg.Timeout = 10 * time.Second
 	}
 	var o options
 	for _, opt := range opts {
@@ -92,7 +140,7 @@ func New(cfg Config, ts auth.TokenSource, scopes []string, opts ...Option) (*Cli
 	if o.propagators != nil {
 		otelOpts = append(otelOpts, otelhttp.WithPropagators(o.propagators))
 	}
-	rt := otelhttp.NewTransport(auth.BearerTransport(o.base, ts, Audience, scopes...), otelOpts...)
+	rt := limitTransport{base: otelhttp.NewTransport(auth.BearerTransport(o.base, ts, Audience, scopes...), otelOpts...)}
 	httpClient := &http.Client{
 		Transport: rt,
 		Timeout:   cfg.Timeout,

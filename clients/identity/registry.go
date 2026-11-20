@@ -30,7 +30,9 @@ func NewManifestRegistry(c *ClientWithResponses) *ManifestRegistry {
 //	200                                    nil
 //	422                                    *manifest.InvalidError
 //	401, 403                               manifest.ErrDenied
-//	5xx, network error, token unavailable  manifest.ErrUnavailable
+//	408, 429, 5xx, network error,
+//	token unavailable                      manifest.ErrUnavailable
+//	other 4xx                              manifest.ErrRejected
 //	invalid_client, invalid_scope,
 //	unauthorized_client from the token
 //	endpoint                               manifest.ErrDenied
@@ -62,7 +64,12 @@ func (r *ManifestRegistry) Publish(ctx context.Context, m manifest.PermissionMan
 		return invalidError(resp.ApplicationproblemJSON422)
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return fmt.Errorf("%w: status %d", manifest.ErrDenied, status)
+	case http.StatusRequestTimeout, http.StatusTooManyRequests:
+		return fmt.Errorf("%w: status %d", manifest.ErrUnavailable, status)
 	default:
+		if status >= 400 && status < 500 {
+			return fmt.Errorf("%w: status %d", manifest.ErrRejected, status)
+		}
 		return fmt.Errorf("%w: status %d", manifest.ErrUnavailable, status)
 	}
 }
