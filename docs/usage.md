@@ -1274,6 +1274,11 @@ handler := requestid.Middleware()(mux)
 
 In a handler, `requestid.FromContext(ctx)` returns the ID.
 
+Other exports:
+
+- `requestid.Header` is the constant `X-Request-ID`, the name of the request ID header.
+- `requestid.ContextWithID(ctx, id)` puts a request ID in a context. The middleware uses it. A test uses it to make a context that has a request ID.
+
 Errors: None.
 
 Rules and limits:
@@ -1321,7 +1326,7 @@ Errors. `Verify` wraps one of these errors, so `errors.Is` works. The middleware
 | `ErrExpired` | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `expired` |
 | `ErrWrongIssuer` | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `wrong_issuer` |
 | `ErrWrongAudience` | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `wrong_audience` |
-| `ErrKeysUnavailable` | 503, `Retry-After: 5` | none | `auth_unavailable` | `Authentication unavailable` | `keys_unavailable` |
+| `ErrKeysUnavailable` (no keys fetched yet, or the rate limit blocks the refetch for an unknown `kid`) | 503, `Retry-After: 5` | none | `auth_unavailable` | `Authentication unavailable` | `keys_unavailable` |
 | Other error | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `invalid` |
 | Missing scope (from `RequireScopes`) | 403 | `Bearer error="insufficient_scope", scope="..."` | `insufficient_scope` | `Missing scopes` | Not counted |
 
@@ -1330,6 +1335,9 @@ A 403 body also has `missingScopes`, the list of the scopes that the principal l
 Rules and limits:
 
 - The scheme `Bearer` is case-insensitive. A request with no header, another scheme, or an empty token gets `ErrNoToken`.
+- A request with more than one `Authorization` header gets 401 (`ErrInvalidToken`). The middleware does not choose one header, because another component can read another header.
+- `auth.Outcome(err)` returns the value of the metric attribute `outcome` for an error, as in the error map. A nil error gives `ok`. Use it when you count the result of a direct `Verify` call.
+- `auth.WithMeterProvider(mp)` sets the meter provider of `auth.Middleware`. The default is the global meter provider. Use it in a test to read the metric.
 - The middleware counts each verification in the metric `constellation.auth.verify`. The adapter does not count it, so one request is one count.
 - On success, the span gets `enduser.id`, `constellation.principal.type`, and `constellation.client.id`. The log records get `principal.id`, `principal.type`, and `client.id`.
 - `RequireScopes` fails closed. If the context has no principal (the chain has no `auth.Middleware`), it returns a 500 problem with the code `auth_not_configured`, writes one `error` log record, and does not call the next handler.
@@ -1352,8 +1360,9 @@ Environment variables: nest `jwt.Config` with `envPrefix:"AUTH__"`.
 | `<PREFIX>AUTH__JWKS_URL` | string | `<Issuer>/.well-known/jwks.json` | Optional. |
 | `<PREFIX>AUTH__REFRESH_INTERVAL` | duration | `10m` | Optional. The time between the background refreshes. |
 | `<PREFIX>AUTH__MIN_REFETCH_INTERVAL` | duration | `30s` | Optional. The shortest time between two fetches that an unknown key ID starts. |
-| `<PREFIX>AUTH__LEEWAY` | duration | `30s` | Optional. The clock skew that the time claims allow. |
+| `<PREFIX>AUTH__LEEWAY` | duration | `30s` | Optional. The clock skew that the time claims allow. The value must be 0 to 2 minutes. 0 gives the default. |
 | `<PREFIX>AUTH__HTTP_TIMEOUT` | duration | `5s` | Optional. The time limit of one JWKS fetch. |
+| `<PREFIX>AUTH__ALLOW_INSECURE_HTTP` | bool | `false` | Optional. Allows the scheme `http` for `ISSUER` and `JWKS_URL`. Use it only for local compose and tests. Never set it in production. |
 
 Use:
 
@@ -1373,7 +1382,13 @@ defer verifier.Close()
 handler := auth.Middleware(verifier)(mux)
 ```
 
-Errors: `New` returns an error that names the missing variable. `Verify` returns the errors of the `auth` section.
+Options of `New`:
+
+- `jwt.WithHTTPClient(c)` sets the HTTP client for the JWKS fetch. The verifier uses a copy of the client that does not follow redirects.
+- `jwt.WithClock(now)` sets the clock. A test uses it to move the time.
+- `jwt.WithMeterProvider(mp)` sets the meter provider. The default is the global meter provider.
+
+Errors: `New` returns an error that names the variable in each of these cases: `Issuer` or `Audience` is missing, `Issuer` or `JWKSURL` does not use `https` (and `AllowInsecureHTTP` is `false`), `Issuer` or `JWKSURL` is not an `http` or `https` URL, and `Leeway` is negative or more than 2 minutes. `Verify` returns the errors of the `auth` section.
 
 Rules and limits:
 
@@ -1382,8 +1397,11 @@ Rules and limits:
 - The first `Verify` fetches the JWKS. A service starts when identity is down. Until a fetch works, `Verify` returns `ErrKeysUnavailable`.
 - A refresh replaces the full key set. A key that the issuer removed stops working after the next refresh.
 - A failed fetch keeps the old keys. A fetch fails on a status other than 200, on a body that is not valid JSON, on a body larger than 64 KiB, and on a key set with no accepted key.
-- A token with an unknown `kid` starts one refetch, at most once in `MinRefetchInterval`. Concurrent calls share one fetch.
-- `Start` is optional. Without it, the cache refreshes only when a token has an unknown `kid`. `Close` stops the refresh and waits for it. A second `Close` does nothing. `Verify` after `Close` still uses the cached keys.
+- A token with an unknown `kid` starts one refetch, at most once in `MinRefetchInterval`. Concurrent calls share one fetch. If the rate limit blocks the refetch, `Verify` returns `ErrKeysUnavailable`, and the middleware answers 503 with `Retry-After`. The client can retry. Any caller with an unknown `kid` can start a window of up to `MinRefetchInterval`. A service that rotates keys must publish the new key before it signs tokens with it.
+- The JWKS fetch does not follow redirects. A redirect response is a failed fetch (`http_error`).
+- `Verify` returns when the context of the caller ends, with an error that wraps `ErrKeysUnavailable` and the context error. The shared fetch continues for the other callers.
+- A time claim (`exp`, `nbf`, `iat`) that is not in the years 1 to 9999 gives `ErrInvalidToken`. The verifier reads claims by their exact names. A claim such as `SCOPE` is not the claim `scope`.
+- `Start` is optional. Without it, the cache refreshes only when a token has an unknown `kid`. `Close` ends a running refresh fetch and waits for the loop. A second `Close` does nothing. `Start` after `Close` does nothing. `Verify` after `Close` still uses the cached keys.
 - Metric `constellation.auth.jwks.fetch` (counter, unit `{fetch}`) has the attribute `outcome` with the values `ok`, `http_error`, `bad_body`, `too_large`, `no_keys`, and `network_error`.
 - Opaque API tokens, introspection, and revocation are not part of this package.
 
@@ -1525,7 +1543,10 @@ Use:
 var t testing.TB
 
 iss := issuer.New(t)
-verifier, err := jwt.New(jwt.Config{Issuer: iss.Issuer(), Audience: "demo", JWKSURL: iss.URL()})
+// The test issuer uses http, so the test sets AllowInsecureHTTP.
+verifier, err := jwt.New(jwt.Config{
+	Issuer: iss.Issuer(), Audience: "demo", JWKSURL: iss.URL(), AllowInsecureHTTP: true,
+})
 if err != nil {
 	t.Fatal(err)
 }
@@ -1543,7 +1564,8 @@ Rules and limits:
 - `Mint` signs a token. `Claims` has a default for each field. A zero field gives the default. `Extra` sets a claim to any value, and `Remove` removes a claim. `Alg`, `Typ`, and `Kid` change the header. `SigningKey` signs with a key that is not in the JWKS.
 - `Alg` values `none`, `HS256`, and `RS256` make forged tokens for the tests of the verifier.
 - `Rotate` adds a key and keeps the old keys. `RemoveKey` removes a key from the JWKS and keeps its private key, so a test can still sign with it.
-- `SetStatus` and `SetBody` make the endpoint return an error status or a raw body. `Close` stops the server. `Fetches` counts the requests.
+- `SetStatus` and `SetBody` make the endpoint return an error status or a raw body. `Close` stops the server, and a later fetch fails with a network error.
+- `KeyIDs()` returns the IDs of all keys, the oldest first. `Fetches()` returns the number of requests that the JWKS endpoint got. `JWK(kid)` returns the public JWK of a key as a map that a test can change and use in `SetBody`.
 - `WithClock` sets the clock of the default `iat` and `exp`. Use it with `jwt.WithClock`.
 - Import this package from test code only. The `depguard` rule `no-test-helpers-in-production` enforces it.
 
@@ -1572,7 +1594,7 @@ Errors: None.
 Rules and limits:
 
 - A mock replaces a port only in a unit test. A server-side integration test uses a test container and a live dependency.
-- Each mock has a function field for each method (`LockFunc`, `UnlockFunc`, `UpFunc`, `CheckFunc`, `VerifyFunc`). If the field is nil, the mock succeeds. Each mock counts its calls (`LockCalls`, `UnlockCalls`, `UpCalls`, `CheckCalls`, `VerifyCalls`).
+- Each mock has a function field for each method (`LockFunc`, `UnlockFunc`, `UpFunc`, `CheckFunc`, `VerifyFunc`). If the field is nil, the mock succeeds. The exception is `Verifier`: if `VerifyFunc` is nil, `Verify` returns `auth.ErrInvalidToken`, so a mock that is not set up fails closed. Each mock counts its calls (`LockCalls`, `UnlockCalls`, `UpCalls`, `CheckCalls`, `VerifyCalls`).
 - `CacheStore` keeps the values in a map and applies `cache.CheckKey`, `cache.CheckTTL`, and `cache.CheckValue`. It has the fields `GetFunc`, `SetFunc`, and `DeleteFunc`, the counts `GetCalls`, `SetCalls`, and `DeleteCalls`, and the helpers `Put`, `Value`, and `TTL`.
 - `Transactor` calls `transaction.Resolve`, then calls `fn` without a database transaction. It follows the rules of the adapter for nested calls and `AfterCommit` hooks: the outermost call runs the hooks after `fn` returns nil, and a nested call joins the hooks of the outer call. `BeforeFunc` can return an error before `fn`. `WithinTxCalls` and `CommitCalls` count the calls.
 - `SecretsRepository` keeps the records in a map and follows the rules of the PostgreSQL adapter. It has a function field for each method (`UpsertFunc`, `GetFunc`, `DeleteFunc`, `ListNamesFunc`, `ListForRewrapFunc`, `UpdateEnvelopeFunc`), call counters, the parameters of the list calls, and the helpers `Put` and `Record`.

@@ -10,7 +10,7 @@
 // a raw body.
 //
 //	iss := issuer.New(t)
-//	verifier, _ := jwt.New(jwt.Config{Issuer: iss.Issuer(), Audience: "demo", JWKSURL: iss.URL()})
+//	verifier, _ := jwt.New(jwt.Config{Issuer: iss.Issuer(), Audience: "demo", JWKSURL: iss.URL(), AllowInsecureHTTP: true})
 //	token := iss.Mint(t, issuer.Claims{Scope: "demo:ticket:read"})
 //
 // Only test code can import this package. The depguard rule

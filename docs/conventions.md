@@ -165,7 +165,6 @@ Values of `outcome` of `retention.duration`:
 - Only the instance that has the lock updates `retention.last_success`. An alert reads the maximum of `retention.last_success` over all instances for each `job`. Example rule: the maximum is older than 3 times the interval of the job.
 - Also alert on a rate of `retention.duration{outcome="error"}` that is more than 0 for a period longer than one interval.
 
-
 ### Authentication metrics
 
 | Metric | Type | Unit | Attributes | Meaning |
