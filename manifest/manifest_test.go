@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -289,5 +290,101 @@ func TestInvalidErrorText(t *testing.T) {
 	}
 	if len(e.Codes()) != 2 {
 		t.Errorf("codes = %v", e.Codes())
+	}
+}
+
+// U12b: rejected, no retry.
+func TestU12bRejected(t *testing.T) {
+	reg := &mock.ManifestRegistry{PublishFunc: func(context.Context, manifest.PermissionManifest) error {
+		return fmt.Errorf("%w: status 409", manifest.ErrRejected)
+	}}
+	h := newHarness(reg)
+	err := h.pub.Run(context.Background())
+	if !errors.Is(err, manifest.ErrRejected) {
+		t.Fatalf("err = %v", err)
+	}
+	if reg.PublishCalls() != 1 {
+		t.Errorf("attempts = %d", reg.PublishCalls())
+	}
+	if h.pub.Checker().Check(context.Background()) == nil {
+		t.Error("the checker is ready")
+	}
+	logs := h.logs.String()
+	if count(logs, "ERROR") != 1 || !strings.Contains(logs, "status 409") {
+		t.Errorf("logs:\n%s", logs)
+	}
+	if got := h.outcomes(t); got["rejected"] != 1 || len(got) != 1 {
+		t.Errorf("outcomes = %v", got)
+	}
+}
+
+// R9: a success at the end of the context counts as a success.
+func TestSuccessWithEndedContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	reg := &mock.ManifestRegistry{PublishFunc: func(context.Context, manifest.PermissionManifest) error {
+		cancel()
+		return nil
+	}}
+	h := newHarness(reg)
+	if err := h.pub.Run(ctx); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !h.pub.Published() || h.pub.Checker().Check(context.Background()) != nil {
+		t.Error("the checker is not ready after a success")
+	}
+	if got := h.outcomes(t); got["ok"] != 1 {
+		t.Errorf("outcomes = %v", got)
+	}
+}
+
+// R10: the retry logs have the error and the real wait.
+func TestRetryLogs(t *testing.T) {
+	var n int
+	reg := &mock.ManifestRegistry{PublishFunc: func(context.Context, manifest.PermissionManifest) error {
+		n++
+		switch n {
+		case 1:
+			return fmt.Errorf("%w: status 503", manifest.ErrUnavailable)
+		case 2:
+			return fmt.Errorf("%w: status 401", manifest.ErrDenied)
+		}
+		return nil
+	}}
+	h := newHarness(reg)
+	if err := h.pub.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	logs := h.logs.String()
+	for _, want := range []string{"status 503", "status 401"} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("logs have no %q:\n%s", want, logs)
+		}
+	}
+	// The backoff is 1 ms to 4 ms with jitter. The first wait is 0.5 ms to 1 ms.
+	// The base wait of the first retry is 1ms, so a jittered wait is below it.
+	if strings.Contains(logs, "wait=1ms") {
+		t.Errorf("the log shows the base wait:\n%s", logs)
+	}
+	if strings.Count(logs, "wait=") != 2 {
+		t.Errorf("logs:\n%s", logs)
+	}
+}
+
+// R17: a manifest that is not valid is not sent.
+func TestInvalidManifestNotSent(t *testing.T) {
+	reg := &mock.ManifestRegistry{}
+	m := testManifest
+	m.App = ".."
+	pub := manifest.NewPublisher(reg, m, manifest.WithLogger(slog.New(slog.NewTextHandler(&syncBuffer{}, nil))),
+		manifest.WithMeterProvider(sdkmetric.NewMeterProvider()))
+	err := pub.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "invalid manifest") {
+		t.Fatalf("err = %v", err)
+	}
+	if reg.PublishCalls() != 0 {
+		t.Errorf("the registry got %d requests", reg.PublishCalls())
+	}
+	if pub.Checker().Check(context.Background()) == nil {
+		t.Error("the checker is ready")
 	}
 }

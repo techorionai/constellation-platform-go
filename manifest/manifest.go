@@ -14,7 +14,7 @@ import (
 // Registry publishes a permission manifest to the identity service.
 type Registry interface {
 	// Publish sends the manifest. It returns nil, an *[InvalidError], [ErrDenied],
-	// or [ErrUnavailable]. An error of another kind counts as [ErrUnavailable].
+	// [ErrRejected], or [ErrUnavailable]. An error of another kind counts as [ErrUnavailable].
 	Publish(ctx context.Context, m PermissionManifest) error
 }
 
@@ -26,6 +26,9 @@ var (
 	// ErrUnavailable means that the identity service is down or that the request
 	// failed. The caller can retry.
 	ErrUnavailable = errors.New("manifest: registry unavailable")
+	// ErrRejected means that the registry refused the request with a fixed 4xx
+	// status that a retry cannot fix, for example 400, 404, or 409.
+	ErrRejected = errors.New("manifest: publish rejected")
 )
 
 // Problem is one problem that the identity service found in a manifest.

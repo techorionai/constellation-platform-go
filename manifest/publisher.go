@@ -21,6 +21,7 @@ const scopeName = "github.com/techorionai/constellation-platform-go/manifest"
 const (
 	outcomeOK          = "ok"
 	outcomeInvalid     = "invalid"
+	outcomeRejected    = "rejected"
 	outcomeDenied      = "denied"
 	outcomeUnavailable = "unavailable"
 )
@@ -53,10 +54,14 @@ type Publisher struct {
 	meterProvider metric.MeterProvider
 	attempts      metric.Int64Counter
 	published     atomic.Bool
+	// invalid is the result of the check of the manifest in NewPublisher.
+	invalid error
 }
 
 // NewPublisher makes a publisher for the manifest. It does not publish. Call
-// [Publisher.Run].
+// [Publisher.Run]. It checks the manifest with [PermissionManifest.Validate].
+// If the manifest is not valid, [Publisher.Run] returns the error and sends no
+// request.
 func NewPublisher(r Registry, m PermissionManifest, opts ...Option) *Publisher {
 	p := &Publisher{
 		registry:      r,
@@ -65,6 +70,7 @@ func NewPublisher(r Registry, m PermissionManifest, opts ...Option) *Publisher {
 		minWait:       time.Second,
 		maxWait:       time.Minute,
 		meterProvider: otel.GetMeterProvider(),
+		invalid:       m.Validate(),
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -86,17 +92,23 @@ func NewPublisher(r Registry, m PermissionManifest, opts ...Option) *Publisher {
 //   - nil after a successful publish.
 //   - the *[InvalidError] when the identity service rejects the manifest. Run does
 //     not retry, because the manifest is wrong. The checker stays "not ready".
+//   - the validation error when the manifest is not valid. Run sends no request.
+//   - [ErrRejected] (wrapped) when the registry refuses the request with a fixed
+//     4xx status. Run does not retry, because the result stays the same.
 //   - ctx.Err() when ctx ends.
 //
 // With [ErrDenied] and [ErrUnavailable], Run retries with backoff. An operator
 // can fix the client config without a restart.
 func (p *Publisher) Run(ctx context.Context) error {
+	if p.invalid != nil {
+		p.count(ctx, outcomeInvalid)
+		p.log.ErrorContext(ctx, "manifest is not valid, no publish",
+			slog.String("app", p.m.App), slog.Any("error", p.invalid))
+		return p.invalid
+	}
 	wait := p.minWait
 	for {
 		err := p.registry.Publish(ctx, p.m)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
 		var invalid *InvalidError
 		switch {
 		case err == nil:
@@ -113,19 +125,34 @@ func (p *Publisher) Run(ctx context.Context) error {
 				slog.String("app", p.m.App),
 				slog.Any("codes", invalid.Codes()))
 			return invalid
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case errors.Is(err, ErrRejected):
+			p.count(ctx, outcomeRejected)
+			p.log.ErrorContext(ctx, "manifest publish rejected, no retry",
+				slog.String("app", p.m.App), slog.Any("error", err))
+			return err
 		case errors.Is(err, ErrDenied):
+			d := jitter(wait)
 			p.count(ctx, outcomeDenied)
 			p.log.ErrorContext(ctx, "manifest publish denied, will retry",
-				slog.String("app", p.m.App), slog.Duration("wait", wait))
+				slog.String("app", p.m.App), slog.Any("error", err), slog.Duration("wait", d))
+			if err := sleep(ctx, d); err != nil {
+				return err
+			}
+			wait = min(wait*2, p.maxWait)
+			continue
 		default:
+			d := jitter(wait)
 			p.count(ctx, outcomeUnavailable)
 			p.log.WarnContext(ctx, "manifest publish failed, will retry",
-				slog.String("app", p.m.App), slog.Duration("wait", wait))
+				slog.String("app", p.m.App), slog.Any("error", err), slog.Duration("wait", d))
+			if err := sleep(ctx, d); err != nil {
+				return err
+			}
+			wait = min(wait*2, p.maxWait)
+			continue
 		}
-		if err := sleep(ctx, jitter(wait)); err != nil {
-			return err
-		}
-		wait = min(wait*2, p.maxWait)
 	}
 }
 
