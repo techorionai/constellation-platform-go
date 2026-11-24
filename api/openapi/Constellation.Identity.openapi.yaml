@@ -169,6 +169,89 @@ paths:
                 type: string
       security:
         - {}
+  /oauth/introspect:
+    post:
+      operationId: OAuth_introspect
+      description: |-
+        Introspect a token (RFC 7662). Only a service client with `private_key_jwt` can call it.
+        Any other caller gets 401 `invalid_client` and learns nothing about the token.
+        Other callers are a public client, a bad or missing assertion, `client_secret`, and `Authorization: Basic`.
+        A repeated form field gives `invalid_request`.
+        In some cases the identity service returns `active: false` and no other field. The cases are:
+        an unknown, expired, or revoked token, and a token of a disabled user.
+        Also a JWT, and a token with no scope for the caller app.
+        For an active token, `scope` is the stored scope of the token.
+        Intersect it with the current permissions of the user.
+        Then keep only the scopes that start with `<caller app>:`.
+        If the result is empty, the response is `{active:false}`. `aud` is the caller app.
+        The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          headers:
+            Cache-Control:
+              required: true
+              description: Cache rule.
+              schema:
+                type: string
+                enum:
+                  - no-store
+            Pragma:
+              required: true
+              description: Cache rule for old HTTP/1.0 caches.
+              schema:
+                type: string
+                enum:
+                  - no-cache
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntrospectResponse'
+        '400':
+          description: |-
+            Error body of an OAuth operation (RFC 6749 section 5.2).
+            The status is 400, except for these codes. `invalid_client` is 401.
+            `server_error` is 500. `temporarily_unavailable` is 503.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+        '401':
+          description: |-
+            Error body of an OAuth operation (RFC 6749 section 5.2).
+            The status is 400, except for these codes. `invalid_client` is 401.
+            `server_error` is 500. `temporarily_unavailable` is 503.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+        '500':
+          description: |-
+            Error body of an OAuth operation (RFC 6749 section 5.2).
+            The status is 400, except for these codes. `invalid_client` is 401.
+            `server_error` is 500. `temporarily_unavailable` is 503.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+        '503':
+          description: |-
+            Error body of an OAuth operation (RFC 6749 section 5.2).
+            The status is 400, except for these codes. `invalid_client` is 401.
+            `server_error` is 500. `temporarily_unavailable` is 503.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthError'
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/IntrospectRequest'
+      security:
+        - {}
   /oauth/revoke:
     post:
       operationId: OAuth_revoke
@@ -227,9 +310,37 @@ paths:
     post:
       operationId: OAuth_token
       description: |-
-        Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, or `refresh_token`.
+        Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, `refresh_token`,
+        or `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693).
         The `scope` of the request can have OIDC scopes. The `scope` of the response has permission keys only.
         The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+
+        Token exchange rules. The parameters `subject_token`, `subject_token_type`, `audience`, and `scope` are required.
+        `actor_token` and `actor_token_type` are optional and appear together.
+        `requested_token_type` is optional. Its only value is `urn:ietf:params:oauth:token-type:access_token`.
+        The actor token is the ID of an agent, not a signed token.
+        The error codes are:
+        `invalid_client` (401): only a service client with `private_key_jwt` can use the grant.
+        `unauthorized_client`: the client does not have the permission `identity:token:exchange`.
+        `invalid_request`: a repeated parameter, `actor_token` without `actor_token_type` or the reverse, or a missing required parameter.
+        `unsupported_token_type`: `subject_token_type` is not the access token URI,
+        or `actor_token_type` is not `urn:constellation:params:oauth:token-type:agent-id`,
+        or `requested_token_type` is not the access token URI.
+        `invalid_grant`: the subject token is not a JWT user access token (`typ` `at+jwt`) of the identity issuer,
+        or it is expired, or its `principal_type` is not `user`, or it has `act`, or its user does not exist or is disabled.
+        A service token, a token with `act`, an exchanged token, and an API token (`cpat_`) are not valid subject tokens.
+        `invalid_grant` is also the code if the `aud` of the subject token is not the `app` of the authenticated client.
+        `invalid_grant` is also the code if the agent does not exist, is disabled, or does not belong to the authenticated client.
+        The error text is the same for all three cases.
+        `invalid_target`: `audience` is not one app key, or it is `identity`.
+        `invalid_scope`: the granted scope is the permissions of the user. If there is an actor,
+        it is also intersected with the permissions of the agent. A requested scope that is not in the granted set fails.
+        `invalid_scope` is also the code for an OIDC scope (`openid`, `profile`, `email`, `offline_access`),
+        and for a scope that does not start with `<audience>:`.
+        The response has no `refresh_token` and no `id_token`.
+        The `exp` of the new token is not later than the `exp` of the subject token.
+        The new token has `sub` of the user. If there is an actor, it has `act` with `principal_type` `agent`.
+        The response has `issued_token_type`.
       parameters: []
       responses:
         '200':
@@ -347,6 +458,422 @@ paths:
               description: Challenge, for example `Bearer error="insufficient_scope"`.
               schema:
                 type: string
+  /v1/agents:
+    post:
+      operationId: Agents_create
+      description: |-
+        Create an agent. The token needs `identity:agent:write` and `identity:admin`.
+        Error code of `Conflict`: `agent_name_taken`.
+        Error codes of `UnprocessableContent`: `client_not_found` and `client_not_service`.
+      parameters: []
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '409':
+          description: The request conflicts with the state of the resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '422':
+          description: The request is well formed, but the server cannot process its content.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableContent'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentCreate'
+      x-required-scopes:
+        - identity:agent:write
+        - identity:admin
+    get:
+      operationId: Agents_list
+      description: List the agents.
+      parameters:
+        - $ref: '#/components/parameters/CursorPageParams.pageToken'
+        - $ref: '#/components/parameters/CursorPageParams.pageSize'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentPage'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:agent:read
+  /v1/agents/{agentId}:
+    get:
+      operationId: Agents_get
+      description: 'Get one agent. Error code of `NotFound`: `agent_not_found`.'
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:agent:read
+    patch:
+      operationId: Agents_update
+      description: |-
+        Change an agent. The token needs `identity:agent:write` and `identity:admin`.
+        Error code of `NotFound`: `agent_not_found`. Error code of `Conflict`: `agent_name_taken`.
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '409':
+          description: The request conflicts with the state of the resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentUpdate'
+      x-required-scopes:
+        - identity:agent:write
+        - identity:admin
+  /v1/agents/{agentId}/roles:
+    get:
+      operationId: AgentRoles_list
+      description: List the roles of an agent.
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CursorPageParams.pageToken'
+        - $ref: '#/components/parameters/CursorPageParams.pageSize'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleAssignmentPage'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:role:read
+  /v1/agents/{agentId}/roles/{role}:
+    put:
+      operationId: AgentRoles_assign
+      description: 'Give a role to an agent. Error code of `UnprocessableContent`: `role_unknown`.'
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: role
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/RoleRef'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleAssignment'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '422':
+          description: The request is well formed, but the server cannot process its content.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableContent'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:role:assign
+    delete:
+      operationId: AgentRoles_remove
+      description: Remove a role from an agent. A role that the agent does not have gives 204.
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: role
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/RoleRef'
+      responses:
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:role:assign
+  /v1/api-tokens/{tokenId}:
+    delete:
+      operationId: ApiTokens_revoke
+      description: 'Revoke the API token of any user. Error code of `NotFound`: `api_token_not_found`. Revoke of a revoked token gives 204.'
+      parameters:
+        - name: tokenId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:api_token:revoke
   /v1/clients:
     post:
       operationId: Clients_create
@@ -913,6 +1440,164 @@ paths:
               schema:
                 $ref: '#/components/schemas/InternalServerError'
       x-required-scopes: []
+  /v1/me/api-tokens:
+    post:
+      operationId: MeApiTokens_create
+      description: |-
+        Create a personal API token. The response has the token one time only.
+        Error code of `Forbidden`: `user_token_required`.
+        Error codes of `UnprocessableContent`: `scope_not_granted` and `token_limit`.
+        `scope_not_granted` means that a requested scope is not a permission of the user.
+        It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
+        `token_limit` means that the user has the maximum number of active tokens,
+        or the maximum number of token records that the service keeps. The service sets both limits.
+      parameters: []
+      responses:
+        '201':
+          description: The request has succeeded and a new resource has been created as a result.
+          headers:
+            Cache-Control:
+              required: true
+              description: Cache rule.
+              schema:
+                type: string
+                enum:
+                  - no-store
+            Pragma:
+              required: true
+              description: Cache rule for old HTTP/1.0 caches.
+              schema:
+                type: string
+                enum:
+                  - no-cache
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiTokenCreated'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '422':
+          description: The request is well formed, but the server cannot process its content.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableContent'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiTokenCreate'
+      x-required-scopes:
+        - identity:api_token:manage_own
+    get:
+      operationId: MeApiTokens_list
+      description: 'List the API tokens of the user. Error code of `Forbidden`: `user_token_required`.'
+      parameters:
+        - $ref: '#/components/parameters/CursorPageParams.pageToken'
+        - $ref: '#/components/parameters/CursorPageParams.pageSize'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiTokenPage'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:api_token:manage_own
+  /v1/me/api-tokens/{tokenId}:
+    delete:
+      operationId: MeApiTokens_revoke
+      description: |-
+        Revoke an API token of the user. A token of another user or an unknown ID gives 404 `api_token_not_found`.
+        Revoke of a revoked token gives 204. Error code of `Forbidden`: `user_token_required`.
+      parameters:
+        - name: tokenId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:api_token:manage_own
   /v1/permission-manifests:
     get:
       operationId: PermissionManifests_list
@@ -1421,6 +2106,57 @@ paths:
               $ref: '#/components/schemas/UserUpdate'
       x-required-scopes:
         - identity:user:write
+  /v1/users/{userId}/api-tokens:
+    get:
+      operationId: UserApiTokens_list
+      description: 'List the API tokens of a user. Error code of `NotFound`: `user_not_found`.'
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CursorPageParams.pageToken'
+        - $ref: '#/components/parameters/CursorPageParams.pageSize'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiTokenPage'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:api_token:read
   /v1/users/{userId}/invites:
     post:
       operationId: Invites_create
@@ -1498,7 +2234,10 @@ paths:
   /v1/users/{userId}/roles:
     get:
       operationId: UserRoles_list
-      description: List the roles of a user.
+      description: |-
+        List the roles of a user.
+        Every active user also has the implicit role `identity:user`. It has no database row.
+        The list shows it with the source `config`.
       parameters:
         - name: userId
           in: path
@@ -1782,6 +2521,211 @@ components:
         maxLength: 1024
       explode: false
   schemas:
+    Agent:
+      type: object
+      required:
+        - id
+        - name
+        - clientId
+        - enabled
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ID of the agent.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Name of the agent. It is unique and case-sensitive.
+        clientId:
+          type: string
+          description: ID of the service client that can act as the agent.
+        enabled:
+          type: boolean
+          description: True if the agent is enabled.
+        createdAt:
+          type: string
+          format: date-time
+          description: Time when the agent was created.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Time when the agent was changed.
+      description: An agent principal.
+    AgentCreate:
+      type: object
+      required:
+        - name
+        - clientId
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Name of the agent. It is unique and case-sensitive.
+        clientId:
+          type: string
+          description: ID of the service client that can act as the agent.
+      description: Request to create an agent.
+    AgentPage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Agent'
+          description: Items of the page.
+        nextPageToken:
+          type: string
+          description: Token for the next page. No value means that this is the last page.
+      description: One page of agents.
+    AgentUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Name of the agent.
+        enabled:
+          type: boolean
+          description: True to enable the agent. False to disable it.
+      description: Request to change an agent. A field that is not present does not change.
+    ApiToken:
+      type: object
+      required:
+        - id
+        - userId
+        - name
+        - scope
+        - createdAt
+        - expiresAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ID of the token.
+        userId:
+          type: string
+          description: ID of the user that owns the token.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Name of the token.
+        scope:
+          allOf:
+            - $ref: '#/components/schemas/ScopeString'
+          description: Permission keys of the token.
+        createdAt:
+          type: string
+          format: date-time
+          description: Time when the token was created.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Time when the token expires.
+        lastUsedAt:
+          type: string
+          format: date-time
+          description: Time when the token was last used.
+        revokedAt:
+          type: string
+          format: date-time
+          description: Time when the token was revoked.
+      description: A personal API token. It has no secret.
+    ApiTokenCreate:
+      type: object
+      required:
+        - name
+        - scope
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Name of the token.
+        scope:
+          allOf:
+            - $ref: '#/components/schemas/ScopeString'
+          description: Permission keys of the token, at least one. An OIDC scope is not valid.
+        expiresInDays:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 365
+          description: Days until the token expires. The identity service can set a lower maximum.
+          default: 90
+      description: Request to create a personal API token.
+    ApiTokenCreated:
+      type: object
+      required:
+        - id
+        - userId
+        - name
+        - scope
+        - createdAt
+        - expiresAt
+        - token
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: ID of the token.
+        userId:
+          type: string
+          description: ID of the user that owns the token.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Name of the token.
+        scope:
+          allOf:
+            - $ref: '#/components/schemas/ScopeString'
+          description: Permission keys of the token.
+        createdAt:
+          type: string
+          format: date-time
+          description: Time when the token was created.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Time when the token expires.
+        lastUsedAt:
+          type: string
+          format: date-time
+          description: Time when the token was last used.
+        revokedAt:
+          type: string
+          format: date-time
+          description: Time when the token was revoked.
+        token:
+          type: string
+          format: password
+          description: |-
+            The token. The format is `cpat_` followed by 43 base64url characters (32 random bytes).
+            The identity service shows it one time only.
+      description: A new personal API token. The response has the token one time only.
+    ApiTokenPage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiToken'
+          description: Items of the page.
+        nextPageToken:
+          type: string
+          description: Token for the next page. No value means that this is the last page.
+      description: One page of personal API tokens.
     AppKey:
       type: string
       maxLength: 32
@@ -2011,7 +2955,11 @@ components:
           type: array
           items:
             type: string
-          description: Supported grant types.
+          description: Supported grant types. They include `urn:ietf:params:oauth:grant-type:token-exchange`.
+        introspection_endpoint:
+          type: string
+          format: uri
+          description: URL of the introspection endpoint.
         subject_types_supported:
           type: array
           items:
@@ -2079,6 +3027,7 @@ components:
             - client_credentials
             - authorization_code
             - refresh_token
+            - urn:ietf:params:oauth:grant-type:token-exchange
         - type: string
       description: Grant type of a token request. The union is open, so a later release can add a grant type.
     InternalServerError:
@@ -2086,6 +3035,90 @@ components:
       allOf:
         - $ref: '#/components/schemas/Problem'
       description: The server has an internal error.
+    IntrospectRequest:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          maxLength: 512
+          format: password
+          description: The token to introspect.
+        token_type_hint:
+          allOf:
+            - $ref: '#/components/schemas/IntrospectTokenTypeHint'
+          description: Type of the token.
+        client_id:
+          type: string
+          description: ID of the client.
+        client_assertion_type:
+          type: string
+          description: Type of the client assertion. It is `urn:ietf:params:oauth:client-assertion-type:jwt-bearer`.
+        client_assertion:
+          type: string
+          format: password
+          description: Signed JWT (`private_key_jwt`) that authenticates a service client.
+      description: |-
+        Form body of an introspection request (RFC 7662).
+        The client fields are optional in the schema. A missing assertion gives the OAuth error `invalid_client`.
+    IntrospectResponse:
+      type: object
+      required:
+        - active
+      properties:
+        active:
+          type: boolean
+          description: True if the token is active for the caller.
+        scope:
+          allOf:
+            - $ref: '#/components/schemas/ScopeString'
+          description: Permission keys of the token that the caller can use.
+        sub:
+          type: string
+          description: ID of the user.
+        aud:
+          allOf:
+            - $ref: '#/components/schemas/AppKey'
+          description: The caller app.
+        exp:
+          type: integer
+          format: int64
+          description: Expiry time in seconds since the Unix epoch.
+        iat:
+          type: integer
+          format: int64
+          description: Issue time in seconds since the Unix epoch.
+        jti:
+          type: string
+          description: ID of the API token.
+        token_type:
+          allOf:
+            - $ref: '#/components/schemas/IntrospectedTokenType'
+          description: Type of the token. It is `api_token` for an API token.
+        principal_type:
+          allOf:
+            - $ref: '#/components/schemas/PrincipalType'
+          description: Type of the principal. It is `user`.
+      description: |-
+        Result of an introspection request (RFC 7662).
+        If `active` is false, no other field is present.
+    IntrospectTokenTypeHint:
+      anyOf:
+        - type: string
+          enum:
+            - refresh_token
+            - access_token
+            - api_token
+        - type: string
+      description: Type hint of a token in an introspection request. The union is open.
+    IntrospectedTokenType:
+      anyOf:
+        - type: string
+          enum:
+            - api_token
+        - type: string
+      description: Type of an introspected token. The union is open.
     Invite:
       type: object
       required:
@@ -2240,6 +3273,14 @@ components:
             $ref: '#/components/schemas/RoleDefinition'
           description: Default roles of the application.
       description: The permissions and default roles that a service publishes.
+    PrincipalType:
+      type: string
+      enum:
+        - user
+        - agent
+        - service
+        - workflow
+      description: Type of a principal.
     Problem:
       type: object
       required:
@@ -2564,6 +3605,27 @@ components:
           type: string
           format: password
           description: Refresh token. For the grant `refresh_token`.
+        subject_token:
+          type: string
+          maxLength: 4096
+          format: password
+          description: Access token of the user. For the grant `urn:ietf:params:oauth:grant-type:token-exchange`.
+        subject_token_type:
+          allOf:
+            - $ref: '#/components/schemas/TokenType'
+          description: Type of the subject token. It is the access token URI. For token exchange.
+        actor_token:
+          type: string
+          format: uuid
+          description: ID of an agent, not a signed token. For token exchange. It goes together with `actor_token_type`.
+        actor_token_type:
+          allOf:
+            - $ref: '#/components/schemas/TokenType'
+          description: Type of the actor token. It is `urn:constellation:params:oauth:token-type:agent-id`. For token exchange.
+        requested_token_type:
+          allOf:
+            - $ref: '#/components/schemas/TokenType'
+          description: Type of the token that the client asks for. It is the access token URI. For token exchange.
       description: Form body of a token request. The OAuth field names are in snake case, as RFC 6749 requires.
     TokenResponse:
       type: object
@@ -2598,7 +3660,19 @@ components:
           type: string
           format: password
           description: ID token. Present if the request had the scope `openid`.
+        issued_token_type:
+          allOf:
+            - $ref: '#/components/schemas/TokenType'
+          description: Type of the issued token. The identity service sets it for token exchange.
       description: Result of a successful token request.
+    TokenType:
+      anyOf:
+        - type: string
+          enum:
+            - urn:ietf:params:oauth:token-type:access_token
+            - urn:constellation:params:oauth:token-type:agent-id
+        - type: string
+      description: Type of a token in a token exchange request. The union is open.
     TokenTypeHint:
       anyOf:
         - type: string
