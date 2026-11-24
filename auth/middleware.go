@@ -58,16 +58,28 @@ func Middleware(v Verifier, opts ...Option) func(http.Handler) http.Handler {
 				return
 			}
 			ctx = ContextWithPrincipal(ctx, p)
-			trace.SpanFromContext(ctx).SetAttributes(
+			spanAttrs := []attribute.KeyValue{
 				attribute.String("enduser.id", p.ID),
 				attribute.String("constellation.principal.type", string(p.Type)),
 				attribute.String("constellation.client.id", p.ClientID),
-			)
-			ctx = telemetry.ContextWithAttrs(ctx,
+				attribute.String("constellation.principal.token_type", string(p.TokenType.OrAccess())),
+			}
+			logAttrs := []slog.Attr{
 				slog.String("principal.id", p.ID),
 				slog.String("principal.type", string(p.Type)),
 				slog.String("client.id", p.ClientID),
-			)
+				slog.String("principal.token_type", string(p.TokenType.OrAccess())),
+			}
+			if p.Act != nil {
+				spanAttrs = append(spanAttrs,
+					attribute.String("constellation.principal.act.id", p.Act.ID),
+					attribute.String("constellation.principal.act.type", string(p.Act.Type)))
+				logAttrs = append(logAttrs,
+					slog.String("principal.act.id", p.Act.ID),
+					slog.String("principal.act.type", string(p.Act.Type)))
+			}
+			trace.SpanFromContext(ctx).SetAttributes(spanAttrs...)
+			ctx = telemetry.ContextWithAttrs(ctx, logAttrs...)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -105,8 +117,8 @@ func writeVerifyError(ctx context.Context, w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrNoToken):
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeBody(ctx, w, problem{Title: "Authentication required", Status: http.StatusUnauthorized, Code: "unauthorized"})
-	case errors.Is(err, ErrKeysUnavailable):
-		slog.WarnContext(ctx, "auth: signing keys unavailable", slog.Any("error", err))
+	case errors.Is(err, ErrKeysUnavailable), errors.Is(err, ErrIntrospectionUnavailable):
+		slog.WarnContext(ctx, "auth: verification unavailable", slog.Any("error", err))
 		w.Header().Set("Retry-After", "5")
 		writeBody(ctx, w, problem{Title: "Authentication unavailable", Status: http.StatusServiceUnavailable, Code: "auth_unavailable"})
 	default:

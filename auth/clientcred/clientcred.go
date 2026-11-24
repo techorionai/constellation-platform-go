@@ -29,9 +29,14 @@ import (
 
 	"github.com/techorionai/constellation-platform-go/auth"
 	"github.com/techorionai/constellation-platform-go/config"
+	"github.com/techorionai/constellation-platform-go/internal/lru"
 )
 
-var _ auth.TokenSource = (*Source)(nil)
+var (
+	_ auth.TokenSource     = (*Source)(nil)
+	_ auth.TokenExchanger  = (*Source)(nil)
+	_ auth.ClientAssertion = (*Source)(nil)
+)
 
 const (
 	scopeName = "github.com/techorionai/constellation-platform-go/auth/clientcred"
@@ -194,10 +199,14 @@ type Source struct {
 	tracerProvider trace.TracerProvider
 	tracer         trace.Tracer
 	requests       metric.Int64Counter
+	exchanges      metric.Int64Counter
 
 	mu     sync.Mutex
 	cache  map[string]entry
 	flight singleflight.Group
+
+	exchangeCache  *lru.Cache[string, entry]
+	exchangeFlight singleflight.Group
 }
 
 // New makes a token source. It checks the config and parses the private key.
@@ -212,6 +221,7 @@ func New(cfg Config, opts ...Option) (*Source, error) {
 		meterProvider:  otel.GetMeterProvider(),
 		tracerProvider: otel.GetTracerProvider(),
 		cache:          make(map[string]entry),
+		exchangeCache:  lru.New[string, entry](exchangeCacheSize),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -244,6 +254,9 @@ func New(cfg Config, opts ...Option) (*Source, error) {
 	s.requests, _ = s.meterProvider.Meter(scopeName).Int64Counter("constellation.auth.token.request",
 		metric.WithUnit("{request}"),
 		metric.WithDescription("Number of token requests, by outcome."))
+	s.exchanges, _ = s.meterProvider.Meter(scopeName).Int64Counter("constellation.auth.token.exchange",
+		metric.WithUnit("{request}"),
+		metric.WithDescription("Number of token exchange requests, by outcome."))
 	return s, nil
 }
 
@@ -323,6 +336,20 @@ func (s *Source) unexpired(key string) (string, bool) {
 		return "", false
 	}
 	return e.token, true
+}
+
+// ClientID returns the client ID of the service. It implements
+// [auth.ClientAssertion].
+func (s *Source) ClientID() string { return s.cfg.ID }
+
+// Assertion returns a new private_key_jwt client assertion. The issuer is the
+// audience. Each call has a new jti. It implements [auth.ClientAssertion].
+func (s *Source) Assertion(context.Context) (string, error) {
+	a, err := s.assertion()
+	if err != nil {
+		return "", errors.New("auth/clientcred: cannot sign the assertion")
+	}
+	return a, nil
 }
 
 func (s *Source) assertion() (string, error) {

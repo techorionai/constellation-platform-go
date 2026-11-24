@@ -30,9 +30,10 @@ go get github.com/techorionai/constellation-platform-go@vX.Y.Z
 | [`retention`](#retention) | Background jobs that delete expired data. |
 | [`retention/postgres`](#retentionpostgres) | PostgreSQL table purger and advisory lock for retention jobs. |
 | [`requestid`](#requestid) | Request ID middleware. |
-| [`auth`](#auth) | Principal, token verifier port, scope checks, and HTTP middleware. |
+| [`auth`](#auth) | Principal, token verifier port, `ByFormat`, scope checks, and HTTP middleware. |
 | [`auth/jwt`](#authjwt) | JWKS token verifier for RFC 9068 access tokens. |
-| [`auth/clientcred`](#authclientcred) | Client credentials token source with `private_key_jwt`. |
+| [`auth/introspect`](#authintrospect) | Verifier for personal API tokens, with introspection and an in-memory cache. |
+| [`auth/clientcred`](#authclientcred) | Client credentials token source and token exchange with `private_key_jwt`. |
 | [`clients/identity`](#clientsidentity) | Generated identity client and manifest registry adapter. |
 | [`manifest`](#manifest) | Publish the permission manifest of a service at startup. |
 | [`resources/test/containers`](#resourcestestcontainers) | Start PostgreSQL and Valkey containers in tests. |
@@ -1330,6 +1331,16 @@ Environment variables: None. See `auth/jwt` for the verifier settings.
 
 The package also holds the port `auth.TokenSource` for calls to other services, with the errors `ErrNoScopes`, `ErrBadTokenResponse`, `ErrTokenUnavailable`, and `*OAuthError`. `auth.BearerTransport(base, src, audience, scopes...)` is a round tripper that adds `Authorization: Bearer <token>` to a clone of each request. It does not change the request of the caller. A token error stops the request and returns the error. The adapter is `auth/clientcred`.
 
+`auth.ByFormat(jwt, apiToken)` returns a `Verifier` that selects the verifier by the format of the token. A token with the prefix `cpat_` goes to `apiToken`. All other tokens go to `jwt`. The function uses string checks only. If `apiToken` is nil, an API token gives `ErrInvalidToken`. If `jwt` is nil, any other token gives `ErrInvalidToken`.
+
+```go
+var jwtVerifier auth.Verifier // *jwt.Verifier
+var apiVerifier auth.Verifier // *introspect.Verifier
+handler := auth.Middleware(auth.ByFormat(jwtVerifier, apiVerifier))(http.NotFoundHandler())
+```
+
+The package also holds the ports `auth.ClientAssertion` (the client ID and a new `private_key_jwt` assertion for each call) and `auth.TokenExchanger` (`Exchange`, see `auth/clientcred`). The adapter `auth/clientcred` implements all three ports of the client side.
+
 Use. The order of the middleware is `requestid`, then `auth.Middleware`, then `auth.RequireScopes` for each route:
 
 ```go
@@ -1360,6 +1371,7 @@ Errors. `Verify` wraps one of these errors, so `errors.Is` works. The middleware
 | `ErrWrongIssuer` | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `wrong_issuer` |
 | `ErrWrongAudience` | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `wrong_audience` |
 | `ErrKeysUnavailable` (no keys fetched yet, or the rate limit blocks the refetch for an unknown `kid`) | 503, `Retry-After: 5` | none | `auth_unavailable` | `Authentication unavailable` | `keys_unavailable` |
+| `ErrIntrospectionUnavailable` (identity is down, the client is rejected, the response is not valid, or too many identity calls run) | 503, `Retry-After: 5` | none | `auth_unavailable` | `Authentication unavailable` | `unavailable` |
 | Other error | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `invalid` |
 | Missing scope (from `RequireScopes`) | 403 | `Bearer error="insufficient_scope", scope="..."` | `insufficient_scope` | `Missing scopes` | Not counted |
 
@@ -1372,7 +1384,8 @@ Rules and limits:
 - `auth.Outcome(err)` returns the value of the metric attribute `outcome` for an error, as in the error map. A nil error gives `ok`. Use it when you count the result of a direct `Verify` call.
 - `auth.WithMeterProvider(mp)` sets the meter provider of `auth.Middleware`. The default is the global meter provider. Use it in a test to read the metric.
 - The middleware counts each verification in the metric `constellation.auth.verify`. The adapter does not count it, so one request is one count.
-- On success, the span gets `enduser.id`, `constellation.principal.type`, and `constellation.client.id`. The log records get `principal.id`, `principal.type`, and `client.id`.
+- On success, the span gets `enduser.id`, `constellation.principal.type`, `constellation.client.id`, and `constellation.principal.token_type`. The log records get `principal.id`, `principal.type`, `client.id`, and `principal.token_type`. If `Principal.Act` is not nil, the span also gets `constellation.principal.act.id` and `constellation.principal.act.type`, and the log records get `principal.act.id` and `principal.act.type`.
+- `Principal.TokenType` is `auth.TokenTypeAccess` (a JWT, also the zero value) or `auth.TokenTypeAPI` (a personal API token). A service can refuse API tokens on a route with `p.TokenType.OrAccess() == auth.TokenTypeAPI`.
 - `RequireScopes` fails closed. If the context has no principal (the chain has no `auth.Middleware`), it returns a 500 problem with the code `auth_not_configured`, writes one `error` log record, and does not call the next handler.
 - The token is never in a log record, a span, a metric, or an error body.
 - The principal comes only from the verified token. Never read it from a header or from baggage.
@@ -1436,11 +1449,68 @@ Rules and limits:
 - A time claim (`exp`, `nbf`, `iat`) that is not in the years 1 to 9999 gives `ErrInvalidToken`. The verifier reads claims by their exact names. A claim such as `SCOPE` is not the claim `scope`.
 - `Start` is optional. Without it, the cache refreshes only when a token has an unknown `kid`. `Close` ends a running refresh fetch and waits for the loop. A second `Close` does nothing. `Start` after `Close` does nothing. `Verify` after `Close` still uses the cached keys.
 - Metric `constellation.auth.jwks.fetch` (counter, unit `{fetch}`) has the attribute `outcome` with the values `ok`, `http_error`, `bad_body`, `too_large`, `no_keys`, and `network_error`.
-- Opaque API tokens, introspection, and revocation are not part of this package.
+- Personal API tokens and introspection are in the package `auth/introspect`. Use `auth.ByFormat` to accept both token kinds. This package does not accept a token with the prefix `cpat_`.
+- The principal of this package has `TokenType` `auth.TokenTypeAccess`.
+
+## auth/introspect
+
+Purpose: the adapter of `auth.Verifier` for personal API tokens. It sends the token to the introspection endpoint of the identity service (RFC 7662) and keeps the result in an in-memory cache. Use it with `auth.ByFormat` and `auth/jwt`.
+
+Import path: `github.com/techorionai/constellation-platform-go/auth/introspect`
+
+The service client that calls introspection must be a service client with `private_key_jwt`. The identity service gives 401 `invalid_client` to all other callers. `Config.Audience` must be the app of this service client. The adapter gets the client assertion from the port `auth.ClientAssertion`, for example a `*clientcred.Source`. The adapter does not import `auth/clientcred`.
+
+Environment variables (nest `introspect.Config` with `envPrefix:"AUTH__INTROSPECT__"`):
+
+| Field | Variable | Default | Rule |
+| ----- | -------- | ------- | ---- |
+| `Issuer` | `AUTH__INTROSPECT__ISSUER` | none | Required. `https` unless `AllowInsecureHTTP`. |
+| `IntrospectURL` | `AUTH__INTROSPECT__URL` | `<Issuer>/oauth/introspect` | `https` unless `AllowInsecureHTTP`. In Compose it is the internal URL. |
+| `Audience` | `AUTH__INTROSPECT__AUDIENCE` | none | Required. The app of the service. |
+| `CacheTTL` | `AUTH__INTROSPECT__CACHE_TTL` | `30s` | `1s` to `60s`. |
+| `InactiveTTL` | `AUTH__INTROSPECT__INACTIVE_TTL` | `5s` | `0` to `30s`. `0` means no cache for inactive results. |
+| `CacheSize` | `AUTH__INTROSPECT__CACHE_SIZE` | `10000` | 100 to 1000000 entries. |
+| `InactiveCacheSize` | `AUTH__INTROSPECT__INACTIVE_CACHE_SIZE` | `1000` | 10 to 100000 entries. Used only if `InactiveTTL` is more than 0. |
+| `MaxConcurrent` | `AUTH__INTROSPECT__MAX_CONCURRENT` | `16` | 1 to 256 identity calls at the same time. |
+| `HTTPTimeout` | `AUTH__INTROSPECT__HTTP_TIMEOUT` | `5s` | `1s` to `30s`. |
+| `AllowInsecureHTTP` | `AUTH__INTROSPECT__ALLOW_INSECURE_HTTP` | `false` | Use it only for local Compose and tests. |
+
+A `Config` that code builds must set each field that has a default, because the zero value is not in the range. Each error of `New` names the field and the variable.
+
+Use:
+
+```go
+var cfg struct {
+	Introspect introspect.Config `envPrefix:"AUTH__INTROSPECT__"`
+}
+var client auth.ClientAssertion // a *clientcred.Source
+var jwtVerifier auth.Verifier   // a *jwt.Verifier
+apiVerifier, err := introspect.New(cfg.Introspect, client)
+verifier := auth.ByFormat(jwtVerifier, apiVerifier)
+p, err := verifier.Verify(ctx, "cpat_...")
+```
+
+Errors: `auth.ErrInvalidToken` for a token that is not valid, and `auth.ErrIntrospectionUnavailable` when the verifier cannot say if the token is valid. The middleware maps `ErrIntrospectionUnavailable` to 503 with `Retry-After: 5`.
+
+Rules and limits:
+
+- Token format check. A token must be `cpat_` and 43 characters of the base64url alphabet (`A-Z`, `a-z`, `0-9`, `-`, `_`). The length is 48 bytes. Any other value gives `ErrInvalidToken`, the outcome `invalid_format`, and no call to the identity service. If the token format of the contract changes, this adapter must change.
+- The cache key is the SHA-256 hash of the token. The cache never holds the raw token. An active result stays in the cache for `min(CacheTTL, exp - now)`. A revoked token works for at most `CacheTTL` (60 s at most). An inactive result goes to a separate cache for `InactiveTTL`, so inactive results cannot remove active entries. Each cache is an LRU with a size limit.
+- Concurrent calls for the same token share one request.
+- `MaxConcurrent` limits the number of identity calls at the same time. A call that needs a new request, and finds no free slot, returns `ErrIntrospectionUnavailable` with the outcome `overloaded` and is not cached. A valid token that is not in the cache gets 503 for a short time. Tokens in the cache continue to work. A caller with no credential can send random tokens in the correct format. Each token makes at most one identity call, and `MaxConcurrent` limits the load.
+- The request is a form POST with `token`, `token_type_hint=api_token`, `client_id`, `client_assertion_type`, and `client_assertion`. It does not follow redirects. The body limit is 64 KiB.
+- A network error, a timeout, an HTTP 5xx status, and the error `temporarily_unavailable` give `ErrIntrospectionUnavailable` (outcome `unavailable`). HTTP 400 or 401 with an OAuth error gives `ErrIntrospectionUnavailable` (outcome `client_rejected`) and one `error` log record. This is a configuration problem, for example a bad client key. Any other status, a body that is too large, and bad JSON give `ErrIntrospectionUnavailable` (outcome `invalid_response`) and one `error` log record. None of these results is cached.
+- `active: false` gives `ErrInvalidToken`. For `active: true`, the adapter checks that `token_type` is `api_token`, `aud` is `Config.Audience`, `exp` is in the future, `sub` is not empty, `principal_type` is `user`, and each scope is a valid permission key with the prefix `<Audience>:`. A failed check gives `ErrInvalidToken` (outcome `invalid_response`) and no cache entry. A wrong `aud` also writes one `warn` log record with the expected and the received `aud`.
+- Each kind of log record is limited to one record each 60 seconds.
+- The principal has `ID` (the user), `Type` `user`, the `Scopes`, `Audience`, and `TokenType` `auth.TokenTypeAPI`.
+- No token, hash, or subject goes in a log record, a span, a metric, or an error text.
+- Metric `constellation.auth.introspect` (counter, unit `{verification}`) has the attribute `outcome` with the values `active`, `inactive`, `cached_active`, `cached_inactive`, `unavailable`, `client_rejected`, `invalid_response`, `invalid_format`, and `overloaded`. Histogram `constellation.auth.introspect.duration` (unit `s`) records the HTTP call. Span `auth.introspect.request` for each identity call.
+- The cache is in memory because each service has its own Valkey ACL user and cannot read the keys of the identity service. Each service instance has its own cache.
+- Options: `WithHTTPClient`, `WithClock`, `WithMeterProvider`, and `WithTracerProvider`.
 
 ## auth/clientcred
 
-Purpose: the adapter of `auth.TokenSource`. It gets access tokens with the OAuth client credentials grant and `private_key_jwt` client authentication (RFC 7523). It caches the tokens.
+Purpose: the adapter of `auth.TokenSource`, `auth.TokenExchanger`, and `auth.ClientAssertion`. It gets access tokens with the OAuth client credentials grant and `private_key_jwt` client authentication (RFC 7523). It exchanges a user token for a token for an audience, also for an agent that acts for the user (RFC 8693). It caches the tokens.
 
 Import path: `github.com/techorionai/constellation-platform-go/auth/clientcred`
 
@@ -1480,6 +1550,47 @@ Rules and limits:
 - The code never logs or records the private key, the assertion, or a token.
 - Span `auth.clientcred.token` with the attributes `constellation.client.id` and `constellation.token.audience`. Metric `constellation.auth.token.request` (counter, unit `{request}`) has the attribute `outcome` with the values `ok`, `oauth_error`, `unavailable`, `bad_response`, and `network_error`. A cache hit makes no request and is not counted.
 - The source requires `https` for `Issuer` and `TokenURL` unless `AllowInsecureHTTP` is `true`. The assertion and the token go in clear text over `http`.
+
+### Token exchange
+
+`(*Source).Exchange(ctx, auth.ExchangeRequest{SubjectToken, AgentID, Audience, Scopes})` gets a token for a user with the token exchange grant (RFC 8693). `SubjectToken` is the access token of the user. `AgentID` is the ID of the agent that acts for the user. It is empty for a token for the user only. The new token has the audience and the scopes of the request. If `AgentID` is not empty, the new token has the claim `act` with the agent.
+
+```go
+tok, err := src.Exchange(ctx, auth.ExchangeRequest{
+	SubjectToken: userToken, AgentID: agentID, Audience: "tickets",
+	Scopes: []string{"tickets:ticket:read"},
+})
+```
+
+The client needs the permission `identity:token:exchange` and must be a service client with `private_key_jwt`.
+
+Rules and limits:
+
+- The request form has `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`, `subject_token`, `subject_token_type=urn:ietf:params:oauth:token-type:access_token`, `requested_token_type` (the same URI), `audience`, `scope`, and the client assertion. If `AgentID` is not empty, it also has `actor_token` (the agent ID) and `actor_token_type=urn:constellation:params:oauth:token-type:agent-id`.
+- The response must have `issued_token_type` equal to the access token URI, `token_type` `Bearer`, and `expires_in` from 1 second to 15 minutes. Else `Exchange` returns `auth.ErrBadTokenResponse`.
+- `Exchange` returns `auth.ErrNoScopes` if `Scopes` is empty, and `auth.ErrInvalidToken` if `SubjectToken` is empty or if a value contains a zero byte. It makes no request in these cases.
+- The cache key is the SHA-256 hash of the subject token, the agent ID, the audience, and the sorted scopes, joined with a zero byte. The cache is an LRU with a limit of 10000 entries. The source refreshes at 80 percent of the lifetime. Concurrent calls for one key share one request. If a refresh fails and the cached token has not expired, `Exchange` returns the cached token.
+- The cache holds user access tokens in memory under a hashed key. The entries end with the token.
+- The code never puts the subject token, the new token, or the agent ID in a span, a log, a metric, or an error text.
+- Metric `constellation.auth.token.exchange` (counter, unit `{request}`) has the attribute `outcome` with the values `ok`, `oauth_error`, `unavailable`, `bad_response`, and `network_error`. Span `auth.clientcred.exchange` has the attributes `constellation.auth.client_id`, `constellation.auth.audience`, `constellation.auth.exchange.with_agent` (boolean), and `constellation.auth.outcome`.
+- Only `temporarily_unavailable`, an HTTP 5xx status, and a network error give `auth.ErrTokenUnavailable`. Retry these with backoff. All other OAuth errors give `*auth.OAuthError`. Do not retry the same request.
+
+Error codes of token exchange (from the contract `OAuth_token`):
+
+| Code | Cause | Action of the caller | Go error |
+| ---- | ----- | -------------------- | -------- |
+| `invalid_client` (HTTP 401) | The client is not a service client with `private_key_jwt`, or the assertion is not valid. | Change the client configuration. Do not retry. | `*auth.OAuthError` |
+| `unauthorized_client` | The client does not have `identity:token:exchange`. | Give the permission to the client. Do not retry. | `*auth.OAuthError` |
+| `invalid_request` | A repeated parameter, `actor_token` without `actor_token_type` or the reverse, or a missing required parameter. | This is a bug in the caller or a version mismatch. Do not retry. | `*auth.OAuthError` |
+| `unsupported_token_type` | A token type URI is not the access token URI or the agent ID URI. | This is a version mismatch between client and identity. Do not retry. | `*auth.OAuthError` |
+| `invalid_grant` | The user token is not valid (expired, not a user access token, has `act`, is an API token, or the user is disabled). Or the agent does not exist, is disabled, or does not belong to the client. The error text is the same for the agent cases. | Get a new user token (the user logs in again), or check the agent registration. Do not retry the same request. | `*auth.OAuthError` |
+| `invalid_target` | `audience` is not one app key, or it is `identity`. | Change the audience. Do not retry. | `*auth.OAuthError` |
+| `invalid_scope` | A requested scope is not in the granted set. The granted set is the user permissions. With an agent, it is also intersected with the agent permissions. | With an agent, the agent lacks the permission. Start the approval flow of `VISION.md` section 6.6 or ask for less scope. Do not retry the same request. | `*auth.OAuthError` |
+| `temporarily_unavailable`, HTTP 5xx, network error | Identity is not available. | Retry with backoff. | `auth.ErrTokenUnavailable` |
+
+### Client assertion
+
+`(*Source).ClientID()` and `(*Source).Assertion(ctx)` implement `auth.ClientAssertion`. `Assertion` returns a new `private_key_jwt` assertion for each call, with a new `jti`. The adapter `auth/introspect` uses it.
 
 ## clients/identity
 
@@ -1735,7 +1846,7 @@ Rules and limits:
 
 ## resources/test/mock
 
-Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), `transaction.Transactor` (`Transactor`), `secrets.Repository` (`SecretsRepository`), `retention.Purger` (`RetentionPurger`), `retention.Locker` (`RetentionLocker`), `auth.Verifier` (`Verifier`), `auth.TokenSource` (`TokenSource`), and `manifest.Registry` (`ManifestRegistry`).
+Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), `transaction.Transactor` (`Transactor`), `secrets.Repository` (`SecretsRepository`), `retention.Purger` (`RetentionPurger`), `retention.Locker` (`RetentionLocker`), `auth.Verifier` (`Verifier`), `auth.TokenSource` (`TokenSource`), `auth.TokenExchanger` (`TokenExchanger`), `auth.ClientAssertion` (`ClientAssertion`), and `manifest.Registry` (`ManifestRegistry`).
 
 Import path: `github.com/techorionai/constellation-platform-go/resources/test/mock`
 
@@ -1758,7 +1869,7 @@ Errors: None.
 Rules and limits:
 
 - A mock replaces a port only in a unit test. A server-side integration test uses a test container and a live dependency.
-- Each mock has a function field for each method (`LockFunc`, `UnlockFunc`, `UpFunc`, `CheckFunc`, `VerifyFunc`, `TokenFunc`, `PublishFunc`). If the field is nil, the mock succeeds. The exceptions are `Verifier` and `TokenSource`: if `VerifyFunc` is nil, `Verify` returns `auth.ErrInvalidToken`, and if `TokenFunc` is nil, `Token` returns `auth.ErrTokenUnavailable`, so a mock that is not set up fails closed. Each mock counts its calls (`LockCalls`, `UnlockCalls`, `UpCalls`, `CheckCalls`, `VerifyCalls`, `TokenCalls`, `PublishCalls`).
+- Each mock has a function field for each method (`LockFunc`, `UnlockFunc`, `UpFunc`, `CheckFunc`, `VerifyFunc`, `TokenFunc`, `ExchangeFunc`, `AssertionFunc`, `PublishFunc`). If the field is nil, the mock succeeds. The exceptions are `Verifier`, `TokenSource`, `TokenExchanger`, and `ClientAssertion`: if `VerifyFunc` is nil, `Verify` returns `auth.ErrInvalidToken`, if `TokenFunc` or `ExchangeFunc` is nil, `Token` or `Exchange` returns `auth.ErrTokenUnavailable`, and if `AssertionFunc` is nil, `Assertion` returns an error, so a mock that is not set up fails closed. `ClientAssertion.ID` is the value of `ClientID`. Each mock counts its calls (`LockCalls`, `UnlockCalls`, `UpCalls`, `CheckCalls`, `VerifyCalls`, `TokenCalls`, `ExchangeCalls`, `AssertionCalls`, `PublishCalls`).
 - `CacheStore` keeps the values in a map and applies `cache.CheckKey`, `cache.CheckTTL`, and `cache.CheckValue`. It has the fields `GetFunc`, `SetFunc`, and `DeleteFunc`, the counts `GetCalls`, `SetCalls`, and `DeleteCalls`, and the helpers `Put`, `Value`, and `TTL`.
 - `Transactor` calls `transaction.Resolve`, then calls `fn` without a database transaction. It follows the rules of the adapter for nested calls and `AfterCommit` hooks: the outermost call runs the hooks after `fn` returns nil, and a nested call joins the hooks of the outer call. `BeforeFunc` can return an error before `fn`. `WithinTxCalls` and `CommitCalls` count the calls.
 - `SecretsRepository` keeps the records in a map and follows the rules of the PostgreSQL adapter. It has a function field for each method (`UpsertFunc`, `GetFunc`, `DeleteFunc`, `ListNamesFunc`, `ListForRewrapFunc`, `UpdateEnvelopeFunc`), call counters, the parameters of the list calls, and the helpers `Put` and `Record`.

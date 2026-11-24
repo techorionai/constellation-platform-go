@@ -414,6 +414,7 @@ func (v *Verifier) principal(c claims) (auth.Principal, error) {
 	}
 	p := auth.Principal{
 		ID: c.Sub, Type: ptype, ClientID: c.ClientID, Scopes: scopes, Audience: v.cfg.Audience,
+		TokenType: auth.TokenTypeAccess,
 	}
 	if c.Act != nil {
 		atype := auth.PrincipalType(c.Act.PrincipalType)

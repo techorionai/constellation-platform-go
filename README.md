@@ -2,7 +2,7 @@
 
 Shared Go library of the Constellation platform. Each service repository imports its packages.
 
-Packages in this release: `config`, `telemetry`, `clients/postgres`, `clients/valkey`, `migrate`, `migrate/postgres`, `health`, `health/postgres`, `health/valkey`, `executor`, `decorators`, `cache`, `cache/valkey`, `transaction`, `transaction/postgres`, `secrets`, `secrets/postgres`, `retention`, `retention/postgres`, `requestid`, `auth`, `auth/jwt`, `auth/clientcred`, `clients/identity`, `manifest`, `resources/test/containers`, `resources/test/issuer`, and `resources/test/mock`.
+Packages in this release: `config`, `telemetry`, `clients/postgres`, `clients/valkey`, `migrate`, `migrate/postgres`, `health`, `health/postgres`, `health/valkey`, `executor`, `decorators`, `cache`, `cache/valkey`, `transaction`, `transaction/postgres`, `secrets`, `secrets/postgres`, `retention`, `retention/postgres`, `requestid`, `auth`, `auth/jwt`, `auth/introspect`, `auth/clientcred`, `clients/identity`, `manifest`, `resources/test/containers`, `resources/test/issuer`, and `resources/test/mock`.
 
 ## Layout
 
@@ -17,7 +17,8 @@ manifest/                    Permission manifest publisher, port, and loader
 requestid/                   Request ID middleware
 auth/                        Principal, verifier port, scope checks, HTTP middleware
 auth/jwt/                    JWKS verifier for access tokens
-auth/clientcred/             Client credentials token source
+auth/introspect/             API token verifier with introspection
+auth/clientcred/             Client credentials token source and token exchange
 resources/test/containers/   PostgreSQL and Valkey containers for tests
 resources/test/issuer/       Test token issuer with a JWKS endpoint
 resources/test/mock/         Mocks of ports

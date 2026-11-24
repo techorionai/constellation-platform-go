@@ -573,3 +573,12 @@ func TestIdentityAdminReadStaysValid(t *testing.T) {
 		t.Errorf("scopes %v", p.Scopes)
 	}
 }
+
+// Issue 15 U19: the principal of a JWT has the token type access_token.
+func TestU19TokenType(t *testing.T) {
+	f := newFixture(t)
+	p := f.mustVerify(t, issuer.Claims{Scope: "demo:ticket:read"})
+	if p.TokenType != auth.TokenTypeAccess {
+		t.Errorf("TokenType = %q", p.TokenType)
+	}
+}
