@@ -169,9 +169,14 @@ Values of `outcome` of `retention.duration`:
 
 | Metric | Type | Unit | Attributes | Meaning |
 | ------ | ---- | ---- | ---------- | ------- |
-| `constellation.auth.verify` | Counter | `{verification}` | `outcome` (`ok`, `no_token`, `invalid`, `expired`, `wrong_issuer`, `wrong_audience`, `keys_unavailable`) | One count for each request that `auth.Middleware` verifies. |
+| `constellation.auth.verify` | Counter | `{verification}` | `outcome` (`ok`, `no_token`, `invalid`, `expired`, `wrong_issuer`, `wrong_audience`, `keys_unavailable`, `unavailable`) | One count for each request that `auth.Middleware` verifies. |
 | `constellation.auth.jwks.fetch` | Counter | `{fetch}` | `outcome` (`ok`, `http_error`, `bad_body`, `too_large`, `no_keys`, `network_error`) | One count for each JWKS fetch of `auth/jwt`. |
 | `constellation.auth.token.request` | Counter | `{request}` | `outcome` (`ok`, `oauth_error`, `unavailable`, `bad_response`, `network_error`) | One count for each token request of `auth/clientcred`. A cache hit makes no request and is not counted. |
+| `constellation.auth.token.exchange` | Counter | `{request}` | `outcome` (`ok`, `oauth_error`, `unavailable`, `bad_response`, `network_error`) | One count for each token exchange request of `auth/clientcred`. A cache hit makes no request and is not counted. |
+| `constellation.auth.introspect` | Counter | `{verification}` | `outcome` (`active`, `inactive`, `cached_active`, `cached_inactive`, `unavailable`, `client_rejected`, `invalid_response`, `invalid_format`, `overloaded`) | One count for each API token verification of `auth/introspect`. |
+| `constellation.auth.introspect.duration` | Histogram | `s` | none | Duration of the HTTP call to the introspection endpoint. |
+
+Spans: `auth.clientcred.token` (token request), `auth.clientcred.exchange` (token exchange, attributes `constellation.auth.client_id`, `constellation.auth.audience`, `constellation.auth.exchange.with_agent`, and `constellation.auth.outcome`), and `auth.introspect.request` (introspection call). An authenticated request span also has `constellation.principal.token_type`, and with an actor `constellation.principal.act.id` and `constellation.principal.act.type`.
 
 ### Manifest metrics
 
@@ -187,8 +192,11 @@ An alert on a high rate of `keys_unavailable` or of `network_error` shows that t
 - Never read the principal from a header or from baggage. The principal comes only from a token that `auth.Middleware` verified.
 - Each service checks the audience and the scopes of each request. Use `auth.Middleware` with the `AppKey` of the service as the audience, and `auth.RequireScopes` on each route.
 - The order of the middleware is `requestid.Middleware`, then `auth.Middleware`, then `auth.RequireScopes` for each route.
-- Only `auth/jwt`, `auth/clientcred`, and the test issuer import the JOSE library. A `depguard` rule keeps it out of `auth` and `requestid`.
+- Only `auth/jwt`, `auth/clientcred`, and the test issuer import the JOSE library. The adapter `auth/introspect` gets its client assertion from the port `auth.ClientAssertion`, and a `depguard` rule denies it the JOSE library and `clients/identity`. A `depguard` rule keeps it out of `auth` and `requestid`.
 - Never log a private key, an assertion, or a token. Never put one in a span attribute, a metric attribute, or an error text.
+- The introspection cache of `auth/introspect` is in memory and not in Valkey. Each service has its own Valkey key prefix and ACL user, and cannot read the keys of the identity service. A revoked API token works for a maximum of `CacheTTL` (60 s at most) in each service instance.
+- A cache key that comes from a token is a SHA-256 hash. The cache never holds the raw token as a key. This applies to `auth/introspect` and to the exchange cache of `auth/clientcred`.
+- Use `auth.ByFormat(jwtVerifier, introspectVerifier)` to accept both JWT access tokens and personal API tokens. A service that must refuse API tokens on a route checks `Principal.TokenType`.
 
 ## Generated code
 

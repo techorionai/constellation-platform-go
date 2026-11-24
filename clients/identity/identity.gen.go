@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/oapi-codegen/runtime"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
 // Defines values for AssignmentSource.
@@ -55,16 +56,16 @@ func (e ClientSource) Valid() bool {
 
 // Defines values for ClientType.
 const (
-	Public  ClientType = "public"
-	Service ClientType = "service"
+	ClientTypePublic  ClientType = "public"
+	ClientTypeService ClientType = "service"
 )
 
 // Valid indicates whether the value is a known member of the ClientType enum.
 func (e ClientType) Valid() bool {
 	switch e {
-	case Public:
+	case ClientTypePublic:
 		return true
-	case Service:
+	case ClientTypeService:
 		return true
 	default:
 		return false
@@ -73,9 +74,10 @@ func (e ClientType) Valid() bool {
 
 // Defines values for GrantType0.
 const (
-	GrantType0AuthorizationCode GrantType0 = "authorization_code"
-	GrantType0ClientCredentials GrantType0 = "client_credentials"
-	GrantType0RefreshToken      GrantType0 = "refresh_token"
+	GrantType0AuthorizationCode                        GrantType0 = "authorization_code"
+	GrantType0ClientCredentials                        GrantType0 = "client_credentials"
+	GrantType0RefreshToken                             GrantType0 = "refresh_token"
+	GrantType0UrnIetfParamsOauthGrantTypeTokenExchange GrantType0 = "urn:ietf:params:oauth:grant-type:token-exchange"
 )
 
 // Valid indicates whether the value is a known member of the GrantType0 enum.
@@ -86,6 +88,44 @@ func (e GrantType0) Valid() bool {
 	case GrantType0ClientCredentials:
 		return true
 	case GrantType0RefreshToken:
+		return true
+	case GrantType0UrnIetfParamsOauthGrantTypeTokenExchange:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for IntrospectTokenTypeHint0.
+const (
+	IntrospectTokenTypeHint0AccessToken  IntrospectTokenTypeHint0 = "access_token"
+	IntrospectTokenTypeHint0ApiToken     IntrospectTokenTypeHint0 = "api_token"
+	IntrospectTokenTypeHint0RefreshToken IntrospectTokenTypeHint0 = "refresh_token"
+)
+
+// Valid indicates whether the value is a known member of the IntrospectTokenTypeHint0 enum.
+func (e IntrospectTokenTypeHint0) Valid() bool {
+	switch e {
+	case IntrospectTokenTypeHint0AccessToken:
+		return true
+	case IntrospectTokenTypeHint0ApiToken:
+		return true
+	case IntrospectTokenTypeHint0RefreshToken:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for IntrospectedTokenType0.
+const (
+	IntrospectedTokenType0ApiToken IntrospectedTokenType0 = "api_token"
+)
+
+// Valid indicates whether the value is a known member of the IntrospectedTokenType0 enum.
+func (e IntrospectedTokenType0) Valid() bool {
+	switch e {
+	case IntrospectedTokenType0ApiToken:
 		return true
 	default:
 		return false
@@ -194,6 +234,30 @@ func (e OAuthErrorCode0) Valid() bool {
 	}
 }
 
+// Defines values for PrincipalType.
+const (
+	PrincipalTypeAgent    PrincipalType = "agent"
+	PrincipalTypeService  PrincipalType = "service"
+	PrincipalTypeUser     PrincipalType = "user"
+	PrincipalTypeWorkflow PrincipalType = "workflow"
+)
+
+// Valid indicates whether the value is a known member of the PrincipalType enum.
+func (e PrincipalType) Valid() bool {
+	switch e {
+	case PrincipalTypeAgent:
+		return true
+	case PrincipalTypeService:
+		return true
+	case PrincipalTypeUser:
+		return true
+	case PrincipalTypeWorkflow:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TokenResponseTokenType.
 const (
 	Bearer TokenResponseTokenType = "Bearer"
@@ -203,6 +267,24 @@ const (
 func (e TokenResponseTokenType) Valid() bool {
 	switch e {
 	case Bearer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TokenType0.
+const (
+	UrnConstellationParamsOauthTokenTypeAgentId TokenType0 = "urn:constellation:params:oauth:token-type:agent-id"
+	UrnIetfParamsOauthTokenTypeAccessToken      TokenType0 = "urn:ietf:params:oauth:token-type:access_token"
+)
+
+// Valid indicates whether the value is a known member of the TokenType0 enum.
+func (e TokenType0) Valid() bool {
+	switch e {
+	case UrnConstellationParamsOauthTokenTypeAgentId:
+		return true
+	case UrnIetfParamsOauthTokenTypeAccessToken:
 		return true
 	default:
 		return false
@@ -276,6 +358,133 @@ func (e OAuthAuthorizeParamsCodeChallengeMethod) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// Agent An agent principal.
+type Agent struct {
+	// ClientId ID of the service client that can act as the agent.
+	ClientId string `json:"clientId"`
+
+	// CreatedAt Time when the agent was created.
+	CreatedAt time.Time `json:"createdAt"`
+
+	// Enabled True if the agent is enabled.
+	Enabled bool `json:"enabled"`
+
+	// Id ID of the agent.
+	Id openapi_types.UUID `json:"id"`
+
+	// Name Name of the agent. It is unique and case-sensitive.
+	Name string `json:"name"`
+
+	// UpdatedAt Time when the agent was changed.
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// AgentCreate Request to create an agent.
+type AgentCreate struct {
+	// ClientId ID of the service client that can act as the agent.
+	ClientId string `json:"clientId"`
+
+	// Name Name of the agent. It is unique and case-sensitive.
+	Name string `json:"name"`
+}
+
+// AgentPage One page of agents.
+type AgentPage struct {
+	// Items Items of the page.
+	Items []Agent `json:"items"`
+
+	// NextPageToken Token for the next page. No value means that this is the last page.
+	NextPageToken *string `json:"nextPageToken,omitempty"`
+}
+
+// AgentUpdate Request to change an agent. A field that is not present does not change.
+type AgentUpdate struct {
+	// Enabled True to enable the agent. False to disable it.
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Name Name of the agent.
+	Name *string `json:"name,omitempty"`
+}
+
+// ApiToken A personal API token. It has no secret.
+type ApiToken struct {
+	// CreatedAt Time when the token was created.
+	CreatedAt time.Time `json:"createdAt"`
+
+	// ExpiresAt Time when the token expires.
+	ExpiresAt time.Time `json:"expiresAt"`
+
+	// Id ID of the token.
+	Id openapi_types.UUID `json:"id"`
+
+	// LastUsedAt Time when the token was last used.
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+
+	// Name Name of the token.
+	Name string `json:"name"`
+
+	// RevokedAt Time when the token was revoked.
+	RevokedAt *time.Time `json:"revokedAt,omitempty"`
+
+	// Scope Permission keys of the token.
+	Scope ScopeString `json:"scope"`
+
+	// UserId ID of the user that owns the token.
+	UserId string `json:"userId"`
+}
+
+// ApiTokenCreate Request to create a personal API token.
+type ApiTokenCreate struct {
+	// ExpiresInDays Days until the token expires. The identity service can set a lower maximum.
+	ExpiresInDays *int32 `json:"expiresInDays,omitempty"`
+
+	// Name Name of the token.
+	Name string `json:"name"`
+
+	// Scope Permission keys of the token, at least one. An OIDC scope is not valid.
+	Scope ScopeString `json:"scope"`
+}
+
+// ApiTokenCreated A new personal API token. The response has the token one time only.
+type ApiTokenCreated struct {
+	// CreatedAt Time when the token was created.
+	CreatedAt time.Time `json:"createdAt"`
+
+	// ExpiresAt Time when the token expires.
+	ExpiresAt time.Time `json:"expiresAt"`
+
+	// Id ID of the token.
+	Id openapi_types.UUID `json:"id"`
+
+	// LastUsedAt Time when the token was last used.
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+
+	// Name Name of the token.
+	Name string `json:"name"`
+
+	// RevokedAt Time when the token was revoked.
+	RevokedAt *time.Time `json:"revokedAt,omitempty"`
+
+	// Scope Permission keys of the token.
+	Scope ScopeString `json:"scope"`
+
+	// Token The token. The format is `cpat_` followed by 43 base64url characters (32 random bytes).
+	// The identity service shows it one time only.
+	Token string `json:"token"`
+
+	// UserId ID of the user that owns the token.
+	UserId string `json:"userId"`
+}
+
+// ApiTokenPage One page of personal API tokens.
+type ApiTokenPage struct {
+	// Items Items of the page.
+	Items []ApiToken `json:"items"`
+
+	// NextPageToken Token for the next page. No value means that this is the last page.
+	NextPageToken *string `json:"nextPageToken,omitempty"`
 }
 
 // AppKey Key of an application, for example `helpdesk` or `customer_portal`.
@@ -399,11 +608,14 @@ type DiscoveryDocument struct {
 	// EndSessionEndpoint URL of the end session endpoint.
 	EndSessionEndpoint string `json:"end_session_endpoint"`
 
-	// GrantTypesSupported Supported grant types.
+	// GrantTypesSupported Supported grant types. They include `urn:ietf:params:oauth:grant-type:token-exchange`.
 	GrantTypesSupported []string `json:"grant_types_supported"`
 
 	// IdTokenSigningAlgValuesSupported Supported algorithms of the ID token signature.
 	IdTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
+
+	// IntrospectionEndpoint URL of the introspection endpoint.
+	IntrospectionEndpoint *string `json:"introspection_endpoint,omitempty"`
 
 	// Issuer Issuer URL.
 	Issuer string `json:"issuer"`
@@ -495,6 +707,78 @@ type GrantType1 = string
 
 // InternalServerError The server has an internal error.
 type InternalServerError = Problem
+
+// IntrospectRequest Form body of an introspection request (RFC 7662).
+// The client fields are optional in the schema. A missing assertion gives the OAuth error `invalid_client`.
+type IntrospectRequest struct {
+	// ClientAssertion Signed JWT (`private_key_jwt`) that authenticates a service client.
+	ClientAssertion *string `json:"client_assertion,omitempty"`
+
+	// ClientAssertionType Type of the client assertion. It is `urn:ietf:params:oauth:client-assertion-type:jwt-bearer`.
+	ClientAssertionType *string `json:"client_assertion_type,omitempty"`
+
+	// ClientId ID of the client.
+	ClientId *string `json:"client_id,omitempty"`
+
+	// Token The token to introspect.
+	Token string `json:"token"`
+
+	// TokenTypeHint Type of the token.
+	TokenTypeHint *IntrospectTokenTypeHint `json:"token_type_hint,omitempty"`
+}
+
+// IntrospectResponse Result of an introspection request (RFC 7662).
+// If `active` is false, no other field is present.
+type IntrospectResponse struct {
+	// Active True if the token is active for the caller.
+	Active bool `json:"active"`
+
+	// Aud The caller app.
+	Aud *AppKey `json:"aud,omitempty"`
+
+	// Exp Expiry time in seconds since the Unix epoch.
+	Exp *int64 `json:"exp,omitempty"`
+
+	// Iat Issue time in seconds since the Unix epoch.
+	Iat *int64 `json:"iat,omitempty"`
+
+	// Jti ID of the API token.
+	Jti *string `json:"jti,omitempty"`
+
+	// PrincipalType Type of the principal. It is `user`.
+	PrincipalType *PrincipalType `json:"principal_type,omitempty"`
+
+	// Scope Permission keys of the token that the caller can use.
+	Scope *ScopeString `json:"scope,omitempty"`
+
+	// Sub ID of the user.
+	Sub *string `json:"sub,omitempty"`
+
+	// TokenType Type of the token. It is `api_token` for an API token.
+	TokenType *IntrospectedTokenType `json:"token_type,omitempty"`
+}
+
+// IntrospectTokenTypeHint Type hint of a token in an introspection request. The union is open.
+type IntrospectTokenTypeHint struct {
+	union json.RawMessage
+}
+
+// IntrospectTokenTypeHint0 defines model for IntrospectTokenTypeHint.0.
+type IntrospectTokenTypeHint0 string
+
+// IntrospectTokenTypeHint1 defines model for IntrospectTokenTypeHint.1.
+type IntrospectTokenTypeHint1 = string
+
+// IntrospectedTokenType Type of an introspected token. The union is open.
+type IntrospectedTokenType struct {
+	union json.RawMessage
+}
+
+// IntrospectedTokenType0 defines model for IntrospectedTokenType.0.
+type IntrospectedTokenType0 string
+
+// IntrospectedTokenType1 defines model for IntrospectedTokenType.1.
+type IntrospectedTokenType1 = string
 
 // Invite An invite that lets a user set up a sign-in.
 type Invite struct {
@@ -598,6 +882,9 @@ type PermissionManifest struct {
 	// Permissions Permissions that the application defines.
 	Permissions []PermissionDefinition `json:"permissions"`
 }
+
+// PrincipalType Type of a principal.
+type PrincipalType string
 
 // Problem Problem details for an HTTP API (RFC 9457).
 type Problem struct {
@@ -783,6 +1070,12 @@ type SessionPage struct {
 
 // TokenRequest Form body of a token request. The OAuth field names are in snake case, as RFC 6749 requires.
 type TokenRequest struct {
+	// ActorToken ID of an agent, not a signed token. For token exchange. It goes together with `actor_token_type`.
+	ActorToken *openapi_types.UUID `json:"actor_token,omitempty"`
+
+	// ActorTokenType Type of the actor token. It is `urn:constellation:params:oauth:token-type:agent-id`. For token exchange.
+	ActorTokenType *TokenType `json:"actor_token_type,omitempty"`
+
 	// Audience Application key of the audience of the access token.
 	Audience *AppKey `json:"audience,omitempty"`
 
@@ -810,8 +1103,17 @@ type TokenRequest struct {
 	// RefreshToken Refresh token. For the grant `refresh_token`.
 	RefreshToken *string `json:"refresh_token,omitempty"`
 
+	// RequestedTokenType Type of the token that the client asks for. It is the access token URI. For token exchange.
+	RequestedTokenType *TokenType `json:"requested_token_type,omitempty"`
+
 	// Scope Requested scopes.
 	Scope *RequestScopeString `json:"scope,omitempty"`
+
+	// SubjectToken Access token of the user. For the grant `urn:ietf:params:oauth:grant-type:token-exchange`.
+	SubjectToken *string `json:"subject_token,omitempty"`
+
+	// SubjectTokenType Type of the subject token. It is the access token URI. For token exchange.
+	SubjectTokenType *TokenType `json:"subject_token_type,omitempty"`
 }
 
 // TokenResponse Result of a successful token request.
@@ -825,6 +1127,9 @@ type TokenResponse struct {
 	// IdToken ID token. Present if the request had the scope `openid`.
 	IdToken *string `json:"id_token,omitempty"`
 
+	// IssuedTokenType Type of the issued token. The identity service sets it for token exchange.
+	IssuedTokenType *TokenType `json:"issued_token_type,omitempty"`
+
 	// RefreshToken Refresh token. Present if the request had the scope `offline_access`.
 	RefreshToken *string `json:"refresh_token,omitempty"`
 
@@ -837,6 +1142,17 @@ type TokenResponse struct {
 
 // TokenResponseTokenType Type of the token.
 type TokenResponseTokenType string
+
+// TokenType Type of a token in a token exchange request. The union is open.
+type TokenType struct {
+	union json.RawMessage
+}
+
+// TokenType0 defines model for TokenType.0.
+type TokenType0 string
+
+// TokenType1 defines model for TokenType.1.
+type TokenType1 = string
 
 // TokenTypeHint Type hint of a token in a revoke request. The union is open.
 type TokenTypeHint struct {
@@ -960,6 +1276,24 @@ type OAuthEndSessionParams struct {
 	State                 *string `form:"state,omitempty" json:"state,omitempty"`
 }
 
+// AgentsListParams defines parameters for AgentsList.
+type AgentsListParams struct {
+	// PageToken Opaque token from `nextPageToken` of the previous page.
+	PageToken *CursorPageParamsPageToken `form:"pageToken,omitempty" json:"pageToken,omitempty"`
+
+	// PageSize Maximum number of items in the page.
+	PageSize *CursorPageParamsPageSize `form:"pageSize,omitempty" json:"pageSize,omitempty"`
+}
+
+// AgentRolesListParams defines parameters for AgentRolesList.
+type AgentRolesListParams struct {
+	// PageToken Opaque token from `nextPageToken` of the previous page.
+	PageToken *CursorPageParamsPageToken `form:"pageToken,omitempty" json:"pageToken,omitempty"`
+
+	// PageSize Maximum number of items in the page.
+	PageSize *CursorPageParamsPageSize `form:"pageSize,omitempty" json:"pageSize,omitempty"`
+}
+
 // ClientsListParams defines parameters for ClientsList.
 type ClientsListParams struct {
 	// PageToken Opaque token from `nextPageToken` of the previous page.
@@ -971,6 +1305,15 @@ type ClientsListParams struct {
 
 // ClientRolesListParams defines parameters for ClientRolesList.
 type ClientRolesListParams struct {
+	// PageToken Opaque token from `nextPageToken` of the previous page.
+	PageToken *CursorPageParamsPageToken `form:"pageToken,omitempty" json:"pageToken,omitempty"`
+
+	// PageSize Maximum number of items in the page.
+	PageSize *CursorPageParamsPageSize `form:"pageSize,omitempty" json:"pageSize,omitempty"`
+}
+
+// MeApiTokensListParams defines parameters for MeApiTokensList.
+type MeApiTokensListParams struct {
 	// PageToken Opaque token from `nextPageToken` of the previous page.
 	PageToken *CursorPageParamsPageToken `form:"pageToken,omitempty" json:"pageToken,omitempty"`
 
@@ -1007,6 +1350,15 @@ type UsersListParams struct {
 	PageSize *CursorPageParamsPageSize `form:"pageSize,omitempty" json:"pageSize,omitempty"`
 }
 
+// UserApiTokensListParams defines parameters for UserApiTokensList.
+type UserApiTokensListParams struct {
+	// PageToken Opaque token from `nextPageToken` of the previous page.
+	PageToken *CursorPageParamsPageToken `form:"pageToken,omitempty" json:"pageToken,omitempty"`
+
+	// PageSize Maximum number of items in the page.
+	PageSize *CursorPageParamsPageSize `form:"pageSize,omitempty" json:"pageSize,omitempty"`
+}
+
 // UserRolesListParams defines parameters for UserRolesList.
 type UserRolesListParams struct {
 	// PageToken Opaque token from `nextPageToken` of the previous page.
@@ -1025,11 +1377,20 @@ type SessionsListParams struct {
 	PageSize *CursorPageParamsPageSize `form:"pageSize,omitempty" json:"pageSize,omitempty"`
 }
 
+// OAuthIntrospectFormdataRequestBody defines body for OAuthIntrospect for application/x-www-form-urlencoded ContentType.
+type OAuthIntrospectFormdataRequestBody = IntrospectRequest
+
 // OAuthRevokeFormdataRequestBody defines body for OAuthRevoke for application/x-www-form-urlencoded ContentType.
 type OAuthRevokeFormdataRequestBody = RevokeRequest
 
 // OAuthTokenFormdataRequestBody defines body for OAuthToken for application/x-www-form-urlencoded ContentType.
 type OAuthTokenFormdataRequestBody = TokenRequest
+
+// AgentsCreateJSONRequestBody defines body for AgentsCreate for application/json ContentType.
+type AgentsCreateJSONRequestBody = AgentCreate
+
+// AgentsUpdateJSONRequestBody defines body for AgentsUpdate for application/json ContentType.
+type AgentsUpdateJSONRequestBody = AgentUpdate
 
 // ClientsCreateJSONRequestBody defines body for ClientsCreate for application/json ContentType.
 type ClientsCreateJSONRequestBody = ClientCreate
@@ -1039,6 +1400,9 @@ type ClientsUpdateJSONRequestBody = ClientUpdate
 
 // ClientKeysAddJSONRequestBody defines body for ClientKeysAdd for application/json ContentType.
 type ClientKeysAddJSONRequestBody = JsonWebKey
+
+// MeApiTokensCreateJSONRequestBody defines body for MeApiTokensCreate for application/json ContentType.
+type MeApiTokensCreateJSONRequestBody = ApiTokenCreate
 
 // PermissionManifestsPublishJSONRequestBody defines body for PermissionManifestsPublish for application/json ContentType.
 type PermissionManifestsPublishJSONRequestBody = PermissionManifest
@@ -1112,6 +1476,14 @@ func (a *DiscoveryDocument) UnmarshalJSON(b []byte) error {
 			return fmt.Errorf("error reading 'id_token_signing_alg_values_supported': %w", err)
 		}
 		delete(object, "id_token_signing_alg_values_supported")
+	}
+
+	if raw, found := object["introspection_endpoint"]; found {
+		err = json.Unmarshal(raw, &a.IntrospectionEndpoint)
+		if err != nil {
+			return fmt.Errorf("error reading 'introspection_endpoint': %w", err)
+		}
+		delete(object, "introspection_endpoint")
 	}
 
 	if raw, found := object["issuer"]; found {
@@ -1241,6 +1613,13 @@ func (a DiscoveryDocument) MarshalJSON() ([]byte, error) {
 		object["id_token_signing_alg_values_supported"], err = json.Marshal(a.IdTokenSigningAlgValuesSupported)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'id_token_signing_alg_values_supported': %w", err)
+		}
+	}
+
+	if a.IntrospectionEndpoint != nil {
+		object["introspection_endpoint"], err = json.Marshal(a.IntrospectionEndpoint)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'introspection_endpoint': %w", err)
 		}
 	}
 
@@ -1523,6 +1902,130 @@ func (t *GrantType) UnmarshalJSON(b []byte) error {
 	return err
 }
 
+// AsIntrospectTokenTypeHint0 returns the union data inside the IntrospectTokenTypeHint as a IntrospectTokenTypeHint0
+func (t IntrospectTokenTypeHint) AsIntrospectTokenTypeHint0() (IntrospectTokenTypeHint0, error) {
+	var body IntrospectTokenTypeHint0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromIntrospectTokenTypeHint0 overwrites any union data inside the IntrospectTokenTypeHint as the provided IntrospectTokenTypeHint0
+func (t *IntrospectTokenTypeHint) FromIntrospectTokenTypeHint0(v IntrospectTokenTypeHint0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeIntrospectTokenTypeHint0 performs a merge with any union data inside the IntrospectTokenTypeHint, using the provided IntrospectTokenTypeHint0
+func (t *IntrospectTokenTypeHint) MergeIntrospectTokenTypeHint0(v IntrospectTokenTypeHint0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsIntrospectTokenTypeHint1 returns the union data inside the IntrospectTokenTypeHint as a IntrospectTokenTypeHint1
+func (t IntrospectTokenTypeHint) AsIntrospectTokenTypeHint1() (IntrospectTokenTypeHint1, error) {
+	var body IntrospectTokenTypeHint1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromIntrospectTokenTypeHint1 overwrites any union data inside the IntrospectTokenTypeHint as the provided IntrospectTokenTypeHint1
+func (t *IntrospectTokenTypeHint) FromIntrospectTokenTypeHint1(v IntrospectTokenTypeHint1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeIntrospectTokenTypeHint1 performs a merge with any union data inside the IntrospectTokenTypeHint, using the provided IntrospectTokenTypeHint1
+func (t *IntrospectTokenTypeHint) MergeIntrospectTokenTypeHint1(v IntrospectTokenTypeHint1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t IntrospectTokenTypeHint) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *IntrospectTokenTypeHint) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsIntrospectedTokenType0 returns the union data inside the IntrospectedTokenType as a IntrospectedTokenType0
+func (t IntrospectedTokenType) AsIntrospectedTokenType0() (IntrospectedTokenType0, error) {
+	var body IntrospectedTokenType0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromIntrospectedTokenType0 overwrites any union data inside the IntrospectedTokenType as the provided IntrospectedTokenType0
+func (t *IntrospectedTokenType) FromIntrospectedTokenType0(v IntrospectedTokenType0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeIntrospectedTokenType0 performs a merge with any union data inside the IntrospectedTokenType, using the provided IntrospectedTokenType0
+func (t *IntrospectedTokenType) MergeIntrospectedTokenType0(v IntrospectedTokenType0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsIntrospectedTokenType1 returns the union data inside the IntrospectedTokenType as a IntrospectedTokenType1
+func (t IntrospectedTokenType) AsIntrospectedTokenType1() (IntrospectedTokenType1, error) {
+	var body IntrospectedTokenType1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromIntrospectedTokenType1 overwrites any union data inside the IntrospectedTokenType as the provided IntrospectedTokenType1
+func (t *IntrospectedTokenType) FromIntrospectedTokenType1(v IntrospectedTokenType1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeIntrospectedTokenType1 performs a merge with any union data inside the IntrospectedTokenType, using the provided IntrospectedTokenType1
+func (t *IntrospectedTokenType) MergeIntrospectedTokenType1(v IntrospectedTokenType1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t IntrospectedTokenType) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *IntrospectedTokenType) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
 // AsOAuthErrorCode0 returns the union data inside the OAuthErrorCode as a OAuthErrorCode0
 func (t OAuthErrorCode) AsOAuthErrorCode0() (OAuthErrorCode0, error) {
 	var body OAuthErrorCode0
@@ -1581,6 +2084,68 @@ func (t OAuthErrorCode) MarshalJSON() ([]byte, error) {
 }
 
 func (t *OAuthErrorCode) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsTokenType0 returns the union data inside the TokenType as a TokenType0
+func (t TokenType) AsTokenType0() (TokenType0, error) {
+	var body TokenType0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTokenType0 overwrites any union data inside the TokenType as the provided TokenType0
+func (t *TokenType) FromTokenType0(v TokenType0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTokenType0 performs a merge with any union data inside the TokenType, using the provided TokenType0
+func (t *TokenType) MergeTokenType0(v TokenType0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsTokenType1 returns the union data inside the TokenType as a TokenType1
+func (t TokenType) AsTokenType1() (TokenType1, error) {
+	var body TokenType1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTokenType1 overwrites any union data inside the TokenType as the provided TokenType1
+func (t *TokenType) FromTokenType1(v TokenType1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeTokenType1 performs a merge with any union data inside the TokenType, using the provided TokenType1
+func (t *TokenType) MergeTokenType1(v TokenType1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t TokenType) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *TokenType) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }
@@ -1745,6 +2310,40 @@ type ClientInterface interface {
 	// The server shows a page, or it redirects to `post_logout_redirect_uri` with `state`.
 	OAuthEndSession(ctx context.Context, params *OAuthEndSessionParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// OAuthIntrospectWithBody performs a POST /oauth/introspect (the `OAuthIntrospect` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Introspect a token (RFC 7662). Only a service client with `private_key_jwt` can call it.
+	// Any other caller gets 401 `invalid_client` and learns nothing about the token.
+	// Other callers are a public client, a bad or missing assertion, `client_secret`, and `Authorization: Basic`.
+	// A repeated form field gives `invalid_request`.
+	// In some cases the identity service returns `active: false` and no other field. The cases are:
+	// an unknown, expired, or revoked token, and a token of a disabled user.
+	// Also a JWT, and a token with no scope for the caller app.
+	// For an active token, `scope` is the stored scope of the token.
+	// Intersect it with the current permissions of the user.
+	// Then keep only the scopes that start with `<caller app>:`.
+	// If the result is empty, the response is `{active:false}`. `aud` is the caller app.
+	// The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+	OAuthIntrospectWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// OAuthIntrospectWithFormdataBody performs a POST /oauth/introspect (the `OAuthIntrospect` operationId) request.
+	// Takes a body of the `application/x-www-form-urlencoded` content type.
+	//
+	// Introspect a token (RFC 7662). Only a service client with `private_key_jwt` can call it.
+	// Any other caller gets 401 `invalid_client` and learns nothing about the token.
+	// Other callers are a public client, a bad or missing assertion, `client_secret`, and `Authorization: Basic`.
+	// A repeated form field gives `invalid_request`.
+	// In some cases the identity service returns `active: false` and no other field. The cases are:
+	// an unknown, expired, or revoked token, and a token of a disabled user.
+	// Also a JWT, and a token with no scope for the caller app.
+	// For an active token, `scope` is the stored scope of the token.
+	// Intersect it with the current permissions of the user.
+	// Then keep only the scopes that start with `<caller app>:`.
+	// If the result is empty, the response is `{active:false}`. `aud` is the caller app.
+	// The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+	OAuthIntrospectWithFormdataBody(ctx context.Context, body OAuthIntrospectFormdataRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// OAuthRevokeWithBody performs a POST /oauth/revoke (the `OAuthRevoke` operationId) request,
 	// with any type of body and a specified content type.
 	//
@@ -1762,17 +2361,73 @@ type ClientInterface interface {
 	// OAuthTokenWithBody performs a POST /oauth/token (the `OAuthToken` operationId) request,
 	// with any type of body and a specified content type.
 	//
-	// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, or `refresh_token`.
+	// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, `refresh_token`,
+	// or `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693).
 	// The `scope` of the request can have OIDC scopes. The `scope` of the response has permission keys only.
 	// The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+	//
+	// Token exchange rules. The parameters `subject_token`, `subject_token_type`, `audience`, and `scope` are required.
+	// `actor_token` and `actor_token_type` are optional and appear together.
+	// `requested_token_type` is optional. Its only value is `urn:ietf:params:oauth:token-type:access_token`.
+	// The actor token is the ID of an agent, not a signed token.
+	// The error codes are:
+	// `invalid_client` (401): only a service client with `private_key_jwt` can use the grant.
+	// `unauthorized_client`: the client does not have the permission `identity:token:exchange`.
+	// `invalid_request`: a repeated parameter, `actor_token` without `actor_token_type` or the reverse, or a missing required parameter.
+	// `unsupported_token_type`: `subject_token_type` is not the access token URI,
+	// or `actor_token_type` is not `urn:constellation:params:oauth:token-type:agent-id`,
+	// or `requested_token_type` is not the access token URI.
+	// `invalid_grant`: the subject token is not a JWT user access token (`typ` `at+jwt`) of the identity issuer,
+	// or it is expired, or its `principal_type` is not `user`, or it has `act`, or its user does not exist or is disabled.
+	// A service token, a token with `act`, an exchanged token, and an API token (`cpat_`) are not valid subject tokens.
+	// `invalid_grant` is also the code if the `aud` of the subject token is not the `app` of the authenticated client.
+	// `invalid_grant` is also the code if the agent does not exist, is disabled, or does not belong to the authenticated client.
+	// The error text is the same for all three cases.
+	// `invalid_target`: `audience` is not one app key, or it is `identity`.
+	// `invalid_scope`: the granted scope is the permissions of the user. If there is an actor,
+	// it is also intersected with the permissions of the agent. A requested scope that is not in the granted set fails.
+	// `invalid_scope` is also the code for an OIDC scope (`openid`, `profile`, `email`, `offline_access`),
+	// and for a scope that does not start with `<audience>:`.
+	// The response has no `refresh_token` and no `id_token`.
+	// The `exp` of the new token is not later than the `exp` of the subject token.
+	// The new token has `sub` of the user. If there is an actor, it has `act` with `principal_type` `agent`.
+	// The response has `issued_token_type`.
 	OAuthTokenWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// OAuthTokenWithFormdataBody performs a POST /oauth/token (the `OAuthToken` operationId) request.
 	// Takes a body of the `application/x-www-form-urlencoded` content type.
 	//
-	// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, or `refresh_token`.
+	// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, `refresh_token`,
+	// or `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693).
 	// The `scope` of the request can have OIDC scopes. The `scope` of the response has permission keys only.
 	// The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+	//
+	// Token exchange rules. The parameters `subject_token`, `subject_token_type`, `audience`, and `scope` are required.
+	// `actor_token` and `actor_token_type` are optional and appear together.
+	// `requested_token_type` is optional. Its only value is `urn:ietf:params:oauth:token-type:access_token`.
+	// The actor token is the ID of an agent, not a signed token.
+	// The error codes are:
+	// `invalid_client` (401): only a service client with `private_key_jwt` can use the grant.
+	// `unauthorized_client`: the client does not have the permission `identity:token:exchange`.
+	// `invalid_request`: a repeated parameter, `actor_token` without `actor_token_type` or the reverse, or a missing required parameter.
+	// `unsupported_token_type`: `subject_token_type` is not the access token URI,
+	// or `actor_token_type` is not `urn:constellation:params:oauth:token-type:agent-id`,
+	// or `requested_token_type` is not the access token URI.
+	// `invalid_grant`: the subject token is not a JWT user access token (`typ` `at+jwt`) of the identity issuer,
+	// or it is expired, or its `principal_type` is not `user`, or it has `act`, or its user does not exist or is disabled.
+	// A service token, a token with `act`, an exchanged token, and an API token (`cpat_`) are not valid subject tokens.
+	// `invalid_grant` is also the code if the `aud` of the subject token is not the `app` of the authenticated client.
+	// `invalid_grant` is also the code if the agent does not exist, is disabled, or does not belong to the authenticated client.
+	// The error text is the same for all three cases.
+	// `invalid_target`: `audience` is not one app key, or it is `identity`.
+	// `invalid_scope`: the granted scope is the permissions of the user. If there is an actor,
+	// it is also intersected with the permissions of the agent. A requested scope that is not in the granted set fails.
+	// `invalid_scope` is also the code for an OIDC scope (`openid`, `profile`, `email`, `offline_access`),
+	// and for a scope that does not start with `<audience>:`.
+	// The response has no `refresh_token` and no `id_token`.
+	// The `exp` of the new token is not later than the `exp` of the subject token.
+	// The new token has `sub` of the user. If there is an actor, it has `act` with `principal_type` `agent`.
+	// The response has `issued_token_type`.
 	OAuthTokenWithFormdataBody(ctx context.Context, body OAuthTokenFormdataRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// OAuthUserinfo performs a GET /oauth/userinfo (the `OAuthUserinfo` operationId) request.
@@ -1783,6 +2438,66 @@ type ClientInterface interface {
 	// A service token gets 403 with `error="insufficient_scope"`.
 	// The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
 	OAuthUserinfo(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AgentsList performs a GET /v1/agents (the `AgentsList` operationId) request.
+	//
+	// List the agents.
+	AgentsList(ctx context.Context, params *AgentsListParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AgentsCreateWithBody performs a POST /v1/agents (the `AgentsCreate` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Create an agent. The token needs `identity:agent:write` and `identity:admin`.
+	// Error code of `Conflict`: `agent_name_taken`.
+	// Error codes of `UnprocessableContent`: `client_not_found` and `client_not_service`.
+	AgentsCreateWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AgentsCreate performs a POST /v1/agents (the `AgentsCreate` operationId) request.
+	// Takes a body of the `application/json` content type.
+	//
+	// Create an agent. The token needs `identity:agent:write` and `identity:admin`.
+	// Error code of `Conflict`: `agent_name_taken`.
+	// Error codes of `UnprocessableContent`: `client_not_found` and `client_not_service`.
+	AgentsCreate(ctx context.Context, body AgentsCreateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AgentsGet performs a GET /v1/agents/{agentId} (the `AgentsGet` operationId) request.
+	//
+	// Get one agent. Error code of `NotFound`: `agent_not_found`.
+	AgentsGet(ctx context.Context, agentId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AgentsUpdateWithBody performs a PATCH /v1/agents/{agentId} (the `AgentsUpdate` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Change an agent. The token needs `identity:agent:write` and `identity:admin`.
+	// Error code of `NotFound`: `agent_not_found`. Error code of `Conflict`: `agent_name_taken`.
+	AgentsUpdateWithBody(ctx context.Context, agentId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AgentsUpdate performs a PATCH /v1/agents/{agentId} (the `AgentsUpdate` operationId) request.
+	// Takes a body of the `application/json` content type.
+	//
+	// Change an agent. The token needs `identity:agent:write` and `identity:admin`.
+	// Error code of `NotFound`: `agent_not_found`. Error code of `Conflict`: `agent_name_taken`.
+	AgentsUpdate(ctx context.Context, agentId string, body AgentsUpdateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AgentRolesList performs a GET /v1/agents/{agentId}/roles (the `AgentRolesList` operationId) request.
+	//
+	// List the roles of an agent.
+	AgentRolesList(ctx context.Context, agentId string, params *AgentRolesListParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AgentRolesRemove performs a DELETE /v1/agents/{agentId}/roles/{role} (the `AgentRolesRemove` operationId) request.
+	//
+	// Remove a role from an agent. A role that the agent does not have gives 204.
+	AgentRolesRemove(ctx context.Context, agentId string, role RoleRef, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AgentRolesAssign performs a PUT /v1/agents/{agentId}/roles/{role} (the `AgentRolesAssign` operationId) request.
+	//
+	// Give a role to an agent. Error code of `UnprocessableContent`: `role_unknown`.
+	AgentRolesAssign(ctx context.Context, agentId string, role RoleRef, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ApiTokensRevoke performs a DELETE /v1/api-tokens/{tokenId} (the `ApiTokensRevoke` operationId) request.
+	//
+	// Revoke the API token of any user. Error code of `NotFound`: `api_token_not_found`. Revoke of a revoked token gives 204.
+	ApiTokensRevoke(ctx context.Context, tokenId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClientsList performs a GET /v1/clients (the `ClientsList` operationId) request.
 	//
@@ -1868,6 +2583,41 @@ type ClientInterface interface {
 	// Get the user of the access token. It needs no permission.
 	MeGet(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// MeApiTokensList performs a GET /v1/me/api-tokens (the `MeApiTokensList` operationId) request.
+	//
+	// List the API tokens of the user. Error code of `Forbidden`: `user_token_required`.
+	MeApiTokensList(ctx context.Context, params *MeApiTokensListParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// MeApiTokensCreateWithBody performs a POST /v1/me/api-tokens (the `MeApiTokensCreate` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Create a personal API token. The response has the token one time only.
+	// Error code of `Forbidden`: `user_token_required`.
+	// Error codes of `UnprocessableContent`: `scope_not_granted` and `token_limit`.
+	// `scope_not_granted` means that a requested scope is not a permission of the user.
+	// It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
+	// `token_limit` means that the user has the maximum number of active tokens,
+	// or the maximum number of token records that the service keeps. The service sets both limits.
+	MeApiTokensCreateWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// MeApiTokensCreate performs a POST /v1/me/api-tokens (the `MeApiTokensCreate` operationId) request.
+	// Takes a body of the `application/json` content type.
+	//
+	// Create a personal API token. The response has the token one time only.
+	// Error code of `Forbidden`: `user_token_required`.
+	// Error codes of `UnprocessableContent`: `scope_not_granted` and `token_limit`.
+	// `scope_not_granted` means that a requested scope is not a permission of the user.
+	// It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
+	// `token_limit` means that the user has the maximum number of active tokens,
+	// or the maximum number of token records that the service keeps. The service sets both limits.
+	MeApiTokensCreate(ctx context.Context, body MeApiTokensCreateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// MeApiTokensRevoke performs a DELETE /v1/me/api-tokens/{tokenId} (the `MeApiTokensRevoke` operationId) request.
+	//
+	// Revoke an API token of the user. A token of another user or an unknown ID gives 404 `api_token_not_found`.
+	// Revoke of a revoked token gives 204. Error code of `Forbidden`: `user_token_required`.
+	MeApiTokensRevoke(ctx context.Context, tokenId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// PermissionManifestsList performs a GET /v1/permission-manifests (the `PermissionManifestsList` operationId) request.
 	//
 	// List the stored manifests.
@@ -1947,6 +2697,11 @@ type ClientInterface interface {
 	// Change the name or the disabled state of a user. Error code of `Conflict`: `last_admin`.
 	UsersUpdate(ctx context.Context, userId string, body UsersUpdateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// UserApiTokensList performs a GET /v1/users/{userId}/api-tokens (the `UserApiTokensList` operationId) request.
+	//
+	// List the API tokens of a user. Error code of `NotFound`: `user_not_found`.
+	UserApiTokensList(ctx context.Context, userId string, params *UserApiTokensListParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// InvitesCreate performs a POST /v1/users/{userId}/invites (the `InvitesCreate` operationId) request.
 	//
 	// Create a new invite for a user. An invite is only for a user with the status `invited`.
@@ -1958,6 +2713,8 @@ type ClientInterface interface {
 	// UserRolesList performs a GET /v1/users/{userId}/roles (the `UserRolesList` operationId) request.
 	//
 	// List the roles of a user.
+	// Every active user also has the implicit role `identity:user`. It has no database row.
+	// The list shows it with the source `config`.
 	UserRolesList(ctx context.Context, userId string, params *UserRolesListParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// UserRolesRemove performs a DELETE /v1/users/{userId}/roles/{role} (the `UserRolesRemove` operationId) request.
@@ -2045,6 +2802,60 @@ func (c *APIClient) OAuthEndSession(ctx context.Context, params *OAuthEndSession
 	return c.Client.Do(req)
 }
 
+// OAuthIntrospectWithBody performs a POST /oauth/introspect (the `OAuthIntrospect` operationId) request,
+// with any type of body and a specified content type.
+//
+// Introspect a token (RFC 7662). Only a service client with `private_key_jwt` can call it.
+// Any other caller gets 401 `invalid_client` and learns nothing about the token.
+// Other callers are a public client, a bad or missing assertion, `client_secret`, and `Authorization: Basic`.
+// A repeated form field gives `invalid_request`.
+// In some cases the identity service returns `active: false` and no other field. The cases are:
+// an unknown, expired, or revoked token, and a token of a disabled user.
+// Also a JWT, and a token with no scope for the caller app.
+// For an active token, `scope` is the stored scope of the token.
+// Intersect it with the current permissions of the user.
+// Then keep only the scopes that start with `<caller app>:`.
+// If the result is empty, the response is `{active:false}`. `aud` is the caller app.
+// The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+func (c *APIClient) OAuthIntrospectWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewOAuthIntrospectRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// OAuthIntrospectWithFormdataBody performs a POST /oauth/introspect (the `OAuthIntrospect` operationId) request.
+// Takes a body of the `application/x-www-form-urlencoded` content type.
+//
+// Introspect a token (RFC 7662). Only a service client with `private_key_jwt` can call it.
+// Any other caller gets 401 `invalid_client` and learns nothing about the token.
+// Other callers are a public client, a bad or missing assertion, `client_secret`, and `Authorization: Basic`.
+// A repeated form field gives `invalid_request`.
+// In some cases the identity service returns `active: false` and no other field. The cases are:
+// an unknown, expired, or revoked token, and a token of a disabled user.
+// Also a JWT, and a token with no scope for the caller app.
+// For an active token, `scope` is the stored scope of the token.
+// Intersect it with the current permissions of the user.
+// Then keep only the scopes that start with `<caller app>:`.
+// If the result is empty, the response is `{active:false}`. `aud` is the caller app.
+// The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+func (c *APIClient) OAuthIntrospectWithFormdataBody(ctx context.Context, body OAuthIntrospectFormdataRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewOAuthIntrospectRequestWithFormdataBody(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // OAuthRevokeWithBody performs a POST /oauth/revoke (the `OAuthRevoke` operationId) request,
 // with any type of body and a specified content type.
 //
@@ -2082,9 +2893,37 @@ func (c *APIClient) OAuthRevokeWithFormdataBody(ctx context.Context, body OAuthR
 // OAuthTokenWithBody performs a POST /oauth/token (the `OAuthToken` operationId) request,
 // with any type of body and a specified content type.
 //
-// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, or `refresh_token`.
+// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, `refresh_token`,
+// or `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693).
 // The `scope` of the request can have OIDC scopes. The `scope` of the response has permission keys only.
 // The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+//
+// Token exchange rules. The parameters `subject_token`, `subject_token_type`, `audience`, and `scope` are required.
+// `actor_token` and `actor_token_type` are optional and appear together.
+// `requested_token_type` is optional. Its only value is `urn:ietf:params:oauth:token-type:access_token`.
+// The actor token is the ID of an agent, not a signed token.
+// The error codes are:
+// `invalid_client` (401): only a service client with `private_key_jwt` can use the grant.
+// `unauthorized_client`: the client does not have the permission `identity:token:exchange`.
+// `invalid_request`: a repeated parameter, `actor_token` without `actor_token_type` or the reverse, or a missing required parameter.
+// `unsupported_token_type`: `subject_token_type` is not the access token URI,
+// or `actor_token_type` is not `urn:constellation:params:oauth:token-type:agent-id`,
+// or `requested_token_type` is not the access token URI.
+// `invalid_grant`: the subject token is not a JWT user access token (`typ` `at+jwt`) of the identity issuer,
+// or it is expired, or its `principal_type` is not `user`, or it has `act`, or its user does not exist or is disabled.
+// A service token, a token with `act`, an exchanged token, and an API token (`cpat_`) are not valid subject tokens.
+// `invalid_grant` is also the code if the `aud` of the subject token is not the `app` of the authenticated client.
+// `invalid_grant` is also the code if the agent does not exist, is disabled, or does not belong to the authenticated client.
+// The error text is the same for all three cases.
+// `invalid_target`: `audience` is not one app key, or it is `identity`.
+// `invalid_scope`: the granted scope is the permissions of the user. If there is an actor,
+// it is also intersected with the permissions of the agent. A requested scope that is not in the granted set fails.
+// `invalid_scope` is also the code for an OIDC scope (`openid`, `profile`, `email`, `offline_access`),
+// and for a scope that does not start with `<audience>:`.
+// The response has no `refresh_token` and no `id_token`.
+// The `exp` of the new token is not later than the `exp` of the subject token.
+// The new token has `sub` of the user. If there is an actor, it has `act` with `principal_type` `agent`.
+// The response has `issued_token_type`.
 func (c *APIClient) OAuthTokenWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewOAuthTokenRequestWithBody(c.Server, contentType, body)
 	if err != nil {
@@ -2100,9 +2939,37 @@ func (c *APIClient) OAuthTokenWithBody(ctx context.Context, contentType string, 
 // OAuthTokenWithFormdataBody performs a POST /oauth/token (the `OAuthToken` operationId) request.
 // Takes a body of the `application/x-www-form-urlencoded` content type.
 //
-// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, or `refresh_token`.
+// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, `refresh_token`,
+// or `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693).
 // The `scope` of the request can have OIDC scopes. The `scope` of the response has permission keys only.
 // The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+//
+// Token exchange rules. The parameters `subject_token`, `subject_token_type`, `audience`, and `scope` are required.
+// `actor_token` and `actor_token_type` are optional and appear together.
+// `requested_token_type` is optional. Its only value is `urn:ietf:params:oauth:token-type:access_token`.
+// The actor token is the ID of an agent, not a signed token.
+// The error codes are:
+// `invalid_client` (401): only a service client with `private_key_jwt` can use the grant.
+// `unauthorized_client`: the client does not have the permission `identity:token:exchange`.
+// `invalid_request`: a repeated parameter, `actor_token` without `actor_token_type` or the reverse, or a missing required parameter.
+// `unsupported_token_type`: `subject_token_type` is not the access token URI,
+// or `actor_token_type` is not `urn:constellation:params:oauth:token-type:agent-id`,
+// or `requested_token_type` is not the access token URI.
+// `invalid_grant`: the subject token is not a JWT user access token (`typ` `at+jwt`) of the identity issuer,
+// or it is expired, or its `principal_type` is not `user`, or it has `act`, or its user does not exist or is disabled.
+// A service token, a token with `act`, an exchanged token, and an API token (`cpat_`) are not valid subject tokens.
+// `invalid_grant` is also the code if the `aud` of the subject token is not the `app` of the authenticated client.
+// `invalid_grant` is also the code if the agent does not exist, is disabled, or does not belong to the authenticated client.
+// The error text is the same for all three cases.
+// `invalid_target`: `audience` is not one app key, or it is `identity`.
+// `invalid_scope`: the granted scope is the permissions of the user. If there is an actor,
+// it is also intersected with the permissions of the agent. A requested scope that is not in the granted set fails.
+// `invalid_scope` is also the code for an OIDC scope (`openid`, `profile`, `email`, `offline_access`),
+// and for a scope that does not start with `<audience>:`.
+// The response has no `refresh_token` and no `id_token`.
+// The `exp` of the new token is not later than the `exp` of the subject token.
+// The new token has `sub` of the user. If there is an actor, it has `act` with `principal_type` `agent`.
+// The response has `issued_token_type`.
 func (c *APIClient) OAuthTokenWithFormdataBody(ctx context.Context, body OAuthTokenFormdataRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewOAuthTokenRequestWithFormdataBody(c.Server, body)
 	if err != nil {
@@ -2124,6 +2991,166 @@ func (c *APIClient) OAuthTokenWithFormdataBody(ctx context.Context, body OAuthTo
 // The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
 func (c *APIClient) OAuthUserinfo(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewOAuthUserinfoRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// AgentsList performs a GET /v1/agents (the `AgentsList` operationId) request.
+//
+// List the agents.
+func (c *APIClient) AgentsList(ctx context.Context, params *AgentsListParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAgentsListRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// AgentsCreateWithBody performs a POST /v1/agents (the `AgentsCreate` operationId) request,
+// with any type of body and a specified content type.
+//
+// Create an agent. The token needs `identity:agent:write` and `identity:admin`.
+// Error code of `Conflict`: `agent_name_taken`.
+// Error codes of `UnprocessableContent`: `client_not_found` and `client_not_service`.
+func (c *APIClient) AgentsCreateWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAgentsCreateRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// AgentsCreate performs a POST /v1/agents (the `AgentsCreate` operationId) request.
+// Takes a body of the `application/json` content type.
+//
+// Create an agent. The token needs `identity:agent:write` and `identity:admin`.
+// Error code of `Conflict`: `agent_name_taken`.
+// Error codes of `UnprocessableContent`: `client_not_found` and `client_not_service`.
+func (c *APIClient) AgentsCreate(ctx context.Context, body AgentsCreateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAgentsCreateRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// AgentsGet performs a GET /v1/agents/{agentId} (the `AgentsGet` operationId) request.
+//
+// Get one agent. Error code of `NotFound`: `agent_not_found`.
+func (c *APIClient) AgentsGet(ctx context.Context, agentId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAgentsGetRequest(c.Server, agentId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// AgentsUpdateWithBody performs a PATCH /v1/agents/{agentId} (the `AgentsUpdate` operationId) request,
+// with any type of body and a specified content type.
+//
+// Change an agent. The token needs `identity:agent:write` and `identity:admin`.
+// Error code of `NotFound`: `agent_not_found`. Error code of `Conflict`: `agent_name_taken`.
+func (c *APIClient) AgentsUpdateWithBody(ctx context.Context, agentId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAgentsUpdateRequestWithBody(c.Server, agentId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// AgentsUpdate performs a PATCH /v1/agents/{agentId} (the `AgentsUpdate` operationId) request.
+// Takes a body of the `application/json` content type.
+//
+// Change an agent. The token needs `identity:agent:write` and `identity:admin`.
+// Error code of `NotFound`: `agent_not_found`. Error code of `Conflict`: `agent_name_taken`.
+func (c *APIClient) AgentsUpdate(ctx context.Context, agentId string, body AgentsUpdateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAgentsUpdateRequest(c.Server, agentId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// AgentRolesList performs a GET /v1/agents/{agentId}/roles (the `AgentRolesList` operationId) request.
+//
+// List the roles of an agent.
+func (c *APIClient) AgentRolesList(ctx context.Context, agentId string, params *AgentRolesListParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAgentRolesListRequest(c.Server, agentId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// AgentRolesRemove performs a DELETE /v1/agents/{agentId}/roles/{role} (the `AgentRolesRemove` operationId) request.
+//
+// Remove a role from an agent. A role that the agent does not have gives 204.
+func (c *APIClient) AgentRolesRemove(ctx context.Context, agentId string, role RoleRef, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAgentRolesRemoveRequest(c.Server, agentId, role)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// AgentRolesAssign performs a PUT /v1/agents/{agentId}/roles/{role} (the `AgentRolesAssign` operationId) request.
+//
+// Give a role to an agent. Error code of `UnprocessableContent`: `role_unknown`.
+func (c *APIClient) AgentRolesAssign(ctx context.Context, agentId string, role RoleRef, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAgentRolesAssignRequest(c.Server, agentId, role)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ApiTokensRevoke performs a DELETE /v1/api-tokens/{tokenId} (the `ApiTokensRevoke` operationId) request.
+//
+// Revoke the API token of any user. Error code of `NotFound`: `api_token_not_found`. Revoke of a revoked token gives 204.
+func (c *APIClient) ApiTokensRevoke(ctx context.Context, tokenId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewApiTokensRevokeRequest(c.Server, tokenId)
 	if err != nil {
 		return nil, err
 	}
@@ -2348,6 +3375,81 @@ func (c *APIClient) MeGet(ctx context.Context, reqEditors ...RequestEditorFn) (*
 	return c.Client.Do(req)
 }
 
+// MeApiTokensList performs a GET /v1/me/api-tokens (the `MeApiTokensList` operationId) request.
+//
+// List the API tokens of the user. Error code of `Forbidden`: `user_token_required`.
+func (c *APIClient) MeApiTokensList(ctx context.Context, params *MeApiTokensListParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewMeApiTokensListRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// MeApiTokensCreateWithBody performs a POST /v1/me/api-tokens (the `MeApiTokensCreate` operationId) request,
+// with any type of body and a specified content type.
+//
+// Create a personal API token. The response has the token one time only.
+// Error code of `Forbidden`: `user_token_required`.
+// Error codes of `UnprocessableContent`: `scope_not_granted` and `token_limit`.
+// `scope_not_granted` means that a requested scope is not a permission of the user.
+// It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
+// `token_limit` means that the user has the maximum number of active tokens,
+// or the maximum number of token records that the service keeps. The service sets both limits.
+func (c *APIClient) MeApiTokensCreateWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewMeApiTokensCreateRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// MeApiTokensCreate performs a POST /v1/me/api-tokens (the `MeApiTokensCreate` operationId) request.
+// Takes a body of the `application/json` content type.
+//
+// Create a personal API token. The response has the token one time only.
+// Error code of `Forbidden`: `user_token_required`.
+// Error codes of `UnprocessableContent`: `scope_not_granted` and `token_limit`.
+// `scope_not_granted` means that a requested scope is not a permission of the user.
+// It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
+// `token_limit` means that the user has the maximum number of active tokens,
+// or the maximum number of token records that the service keeps. The service sets both limits.
+func (c *APIClient) MeApiTokensCreate(ctx context.Context, body MeApiTokensCreateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewMeApiTokensCreateRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// MeApiTokensRevoke performs a DELETE /v1/me/api-tokens/{tokenId} (the `MeApiTokensRevoke` operationId) request.
+//
+// Revoke an API token of the user. A token of another user or an unknown ID gives 404 `api_token_not_found`.
+// Revoke of a revoked token gives 204. Error code of `Forbidden`: `user_token_required`.
+func (c *APIClient) MeApiTokensRevoke(ctx context.Context, tokenId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewMeApiTokensRevokeRequest(c.Server, tokenId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // PermissionManifestsList performs a GET /v1/permission-manifests (the `PermissionManifestsList` operationId) request.
 //
 // List the stored manifests.
@@ -2557,6 +3659,21 @@ func (c *APIClient) UsersUpdate(ctx context.Context, userId string, body UsersUp
 	return c.Client.Do(req)
 }
 
+// UserApiTokensList performs a GET /v1/users/{userId}/api-tokens (the `UserApiTokensList` operationId) request.
+//
+// List the API tokens of a user. Error code of `NotFound`: `user_not_found`.
+func (c *APIClient) UserApiTokensList(ctx context.Context, userId string, params *UserApiTokensListParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUserApiTokensListRequest(c.Server, userId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // InvitesCreate performs a POST /v1/users/{userId}/invites (the `InvitesCreate` operationId) request.
 //
 // Create a new invite for a user. An invite is only for a user with the status `invited`.
@@ -2578,6 +3695,8 @@ func (c *APIClient) InvitesCreate(ctx context.Context, userId string, reqEditors
 // UserRolesList performs a GET /v1/users/{userId}/roles (the `UserRolesList` operationId) request.
 //
 // List the roles of a user.
+// Every active user also has the implicit role `identity:user`. It has no database row.
+// The list shows it with the source `config`.
 func (c *APIClient) UserRolesList(ctx context.Context, userId string, params *UserRolesListParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewUserRolesListRequest(c.Server, userId, params)
 	if err != nil {
@@ -2912,6 +4031,46 @@ func NewOAuthEndSessionRequest(server string, params *OAuthEndSessionParams) (*h
 	return req, nil
 }
 
+// NewOAuthIntrospectRequestWithFormdataBody calls the generic OAuthIntrospect builder with application/x-www-form-urlencoded body
+func NewOAuthIntrospectRequestWithFormdataBody(server string, body OAuthIntrospectFormdataRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	bodyStr, err := runtime.MarshalForm(body, nil)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = strings.NewReader(bodyStr.Encode())
+	return NewOAuthIntrospectRequestWithBody(server, "application/x-www-form-urlencoded", bodyReader)
+}
+
+// NewOAuthIntrospectRequestWithBody constructs an http.Request for the OAuthIntrospect method, with any body, and a specified content type
+func NewOAuthIntrospectRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/oauth/introspect")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewOAuthRevokeRequestWithFormdataBody calls the generic OAuthRevoke builder with application/x-www-form-urlencoded body
 func NewOAuthRevokeRequestWithFormdataBody(server string, body OAuthRevokeFormdataRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -3012,6 +4171,382 @@ func NewOAuthUserinfoRequest(server string) (*http.Request, error) {
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewAgentsListRequest constructs an http.Request for the AgentsList method
+func NewAgentsListRequest(server string, params *AgentsListParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/agents")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.PageToken != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "pageToken", *params.PageToken, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.PageSize != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "pageSize", *params.PageSize, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewAgentsCreateRequest calls the generic AgentsCreate builder with application/json body
+func NewAgentsCreateRequest(server string, body AgentsCreateJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewAgentsCreateRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewAgentsCreateRequestWithBody constructs an http.Request for the AgentsCreate method, with any body, and a specified content type
+func NewAgentsCreateRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/agents")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewAgentsGetRequest constructs an http.Request for the AgentsGet method
+func NewAgentsGetRequest(server string, agentId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "agentId", agentId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/agents/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewAgentsUpdateRequest calls the generic AgentsUpdate builder with application/json body
+func NewAgentsUpdateRequest(server string, agentId string, body AgentsUpdateJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewAgentsUpdateRequestWithBody(server, agentId, "application/json", bodyReader)
+}
+
+// NewAgentsUpdateRequestWithBody constructs an http.Request for the AgentsUpdate method, with any body, and a specified content type
+func NewAgentsUpdateRequestWithBody(server string, agentId string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "agentId", agentId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/agents/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewAgentRolesListRequest constructs an http.Request for the AgentRolesList method
+func NewAgentRolesListRequest(server string, agentId string, params *AgentRolesListParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "agentId", agentId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/agents/%s/roles", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.PageToken != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "pageToken", *params.PageToken, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.PageSize != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "pageSize", *params.PageSize, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewAgentRolesRemoveRequest constructs an http.Request for the AgentRolesRemove method
+func NewAgentRolesRemoveRequest(server string, agentId string, role RoleRef) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "agentId", agentId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "role", role, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/agents/%s/roles/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewAgentRolesAssignRequest constructs an http.Request for the AgentRolesAssign method
+func NewAgentRolesAssignRequest(server string, agentId string, role RoleRef) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "agentId", agentId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "role", role, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/agents/%s/roles/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPut, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewApiTokensRevokeRequest constructs an http.Request for the ApiTokensRevoke method
+func NewApiTokensRevokeRequest(server string, tokenId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "tokenId", tokenId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/api-tokens/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -3469,6 +5004,146 @@ func NewMeGetRequest(server string) (*http.Request, error) {
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewMeApiTokensListRequest constructs an http.Request for the MeApiTokensList method
+func NewMeApiTokensListRequest(server string, params *MeApiTokensListParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/me/api-tokens")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.PageToken != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "pageToken", *params.PageToken, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.PageSize != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "pageSize", *params.PageSize, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewMeApiTokensCreateRequest calls the generic MeApiTokensCreate builder with application/json body
+func NewMeApiTokensCreateRequest(server string, body MeApiTokensCreateJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewMeApiTokensCreateRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewMeApiTokensCreateRequestWithBody constructs an http.Request for the MeApiTokensCreate method, with any body, and a specified content type
+func NewMeApiTokensCreateRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/me/api-tokens")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewMeApiTokensRevokeRequest constructs an http.Request for the MeApiTokensRevoke method
+func NewMeApiTokensRevokeRequest(server string, tokenId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "tokenId", tokenId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/me/api-tokens/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -3956,6 +5631,79 @@ func NewUsersUpdateRequestWithBody(server string, userId string, contentType str
 	return req, nil
 }
 
+// NewUserApiTokensListRequest constructs an http.Request for the UserApiTokensList method
+func NewUserApiTokensListRequest(server string, userId string, params *UserApiTokensListParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "userId", userId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/users/%s/api-tokens", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.PageToken != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "pageToken", *params.PageToken, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.PageSize != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", false, "pageSize", *params.PageSize, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewInvitesCreateRequest constructs an http.Request for the InvitesCreate method
 func NewInvitesCreateRequest(server string, userId string) (*http.Request, error) {
 	var err error
@@ -4328,6 +6076,42 @@ type ClientWithResponsesInterface interface {
 	// Returns a wrapper object for the known response body format(s).
 	OAuthEndSessionWithResponse(ctx context.Context, params *OAuthEndSessionParams, reqEditors ...RequestEditorFn) (*OAuthEndSessionResponse, error)
 
+	// OAuthIntrospectWithBodyWithResponse performs a POST /oauth/introspect (the `OAuthIntrospect` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Introspect a token (RFC 7662). Only a service client with `private_key_jwt` can call it.
+	// Any other caller gets 401 `invalid_client` and learns nothing about the token.
+	// Other callers are a public client, a bad or missing assertion, `client_secret`, and `Authorization: Basic`.
+	// A repeated form field gives `invalid_request`.
+	// In some cases the identity service returns `active: false` and no other field. The cases are:
+	// an unknown, expired, or revoked token, and a token of a disabled user.
+	// Also a JWT, and a token with no scope for the caller app.
+	// For an active token, `scope` is the stored scope of the token.
+	// Intersect it with the current permissions of the user.
+	// Then keep only the scopes that start with `<caller app>:`.
+	// If the result is empty, the response is `{active:false}`. `aud` is the caller app.
+	// The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	OAuthIntrospectWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*OAuthIntrospectResponse, error)
+
+	// OAuthIntrospectWithFormdataBodyWithResponse performs a POST /oauth/introspect (the `OAuthIntrospect` operationId) request.
+	// Takes a body of the `application/x-www-form-urlencoded` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Introspect a token (RFC 7662). Only a service client with `private_key_jwt` can call it.
+	// Any other caller gets 401 `invalid_client` and learns nothing about the token.
+	// Other callers are a public client, a bad or missing assertion, `client_secret`, and `Authorization: Basic`.
+	// A repeated form field gives `invalid_request`.
+	// In some cases the identity service returns `active: false` and no other field. The cases are:
+	// an unknown, expired, or revoked token, and a token of a disabled user.
+	// Also a JWT, and a token with no scope for the caller app.
+	// For an active token, `scope` is the stored scope of the token.
+	// Intersect it with the current permissions of the user.
+	// Then keep only the scopes that start with `<caller app>:`.
+	// If the result is empty, the response is `{active:false}`. `aud` is the caller app.
+	// The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+	OAuthIntrospectWithFormdataBodyWithResponse(ctx context.Context, body OAuthIntrospectFormdataRequestBody, reqEditors ...RequestEditorFn) (*OAuthIntrospectResponse, error)
+
 	// OAuthRevokeWithBodyWithResponse performs a POST /oauth/revoke (the `OAuthRevoke` operationId) request,
 	// with any type of body and a specified content type.
 	//
@@ -4347,9 +6131,37 @@ type ClientWithResponsesInterface interface {
 	// OAuthTokenWithBodyWithResponse performs a POST /oauth/token (the `OAuthToken` operationId) request,
 	// with any type of body and a specified content type.
 	//
-	// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, or `refresh_token`.
+	// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, `refresh_token`,
+	// or `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693).
 	// The `scope` of the request can have OIDC scopes. The `scope` of the response has permission keys only.
 	// The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+	//
+	// Token exchange rules. The parameters `subject_token`, `subject_token_type`, `audience`, and `scope` are required.
+	// `actor_token` and `actor_token_type` are optional and appear together.
+	// `requested_token_type` is optional. Its only value is `urn:ietf:params:oauth:token-type:access_token`.
+	// The actor token is the ID of an agent, not a signed token.
+	// The error codes are:
+	// `invalid_client` (401): only a service client with `private_key_jwt` can use the grant.
+	// `unauthorized_client`: the client does not have the permission `identity:token:exchange`.
+	// `invalid_request`: a repeated parameter, `actor_token` without `actor_token_type` or the reverse, or a missing required parameter.
+	// `unsupported_token_type`: `subject_token_type` is not the access token URI,
+	// or `actor_token_type` is not `urn:constellation:params:oauth:token-type:agent-id`,
+	// or `requested_token_type` is not the access token URI.
+	// `invalid_grant`: the subject token is not a JWT user access token (`typ` `at+jwt`) of the identity issuer,
+	// or it is expired, or its `principal_type` is not `user`, or it has `act`, or its user does not exist or is disabled.
+	// A service token, a token with `act`, an exchanged token, and an API token (`cpat_`) are not valid subject tokens.
+	// `invalid_grant` is also the code if the `aud` of the subject token is not the `app` of the authenticated client.
+	// `invalid_grant` is also the code if the agent does not exist, is disabled, or does not belong to the authenticated client.
+	// The error text is the same for all three cases.
+	// `invalid_target`: `audience` is not one app key, or it is `identity`.
+	// `invalid_scope`: the granted scope is the permissions of the user. If there is an actor,
+	// it is also intersected with the permissions of the agent. A requested scope that is not in the granted set fails.
+	// `invalid_scope` is also the code for an OIDC scope (`openid`, `profile`, `email`, `offline_access`),
+	// and for a scope that does not start with `<audience>:`.
+	// The response has no `refresh_token` and no `id_token`.
+	// The `exp` of the new token is not later than the `exp` of the subject token.
+	// The new token has `sub` of the user. If there is an actor, it has `act` with `principal_type` `agent`.
+	// The response has `issued_token_type`.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	OAuthTokenWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*OAuthTokenResponse, error)
@@ -4357,9 +6169,37 @@ type ClientWithResponsesInterface interface {
 	// OAuthTokenWithFormdataBodyWithResponse performs a POST /oauth/token (the `OAuthToken` operationId) request.
 	// Takes a body of the `application/x-www-form-urlencoded` content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, or `refresh_token`.
+	// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, `refresh_token`,
+	// or `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693).
 	// The `scope` of the request can have OIDC scopes. The `scope` of the response has permission keys only.
 	// The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+	//
+	// Token exchange rules. The parameters `subject_token`, `subject_token_type`, `audience`, and `scope` are required.
+	// `actor_token` and `actor_token_type` are optional and appear together.
+	// `requested_token_type` is optional. Its only value is `urn:ietf:params:oauth:token-type:access_token`.
+	// The actor token is the ID of an agent, not a signed token.
+	// The error codes are:
+	// `invalid_client` (401): only a service client with `private_key_jwt` can use the grant.
+	// `unauthorized_client`: the client does not have the permission `identity:token:exchange`.
+	// `invalid_request`: a repeated parameter, `actor_token` without `actor_token_type` or the reverse, or a missing required parameter.
+	// `unsupported_token_type`: `subject_token_type` is not the access token URI,
+	// or `actor_token_type` is not `urn:constellation:params:oauth:token-type:agent-id`,
+	// or `requested_token_type` is not the access token URI.
+	// `invalid_grant`: the subject token is not a JWT user access token (`typ` `at+jwt`) of the identity issuer,
+	// or it is expired, or its `principal_type` is not `user`, or it has `act`, or its user does not exist or is disabled.
+	// A service token, a token with `act`, an exchanged token, and an API token (`cpat_`) are not valid subject tokens.
+	// `invalid_grant` is also the code if the `aud` of the subject token is not the `app` of the authenticated client.
+	// `invalid_grant` is also the code if the agent does not exist, is disabled, or does not belong to the authenticated client.
+	// The error text is the same for all three cases.
+	// `invalid_target`: `audience` is not one app key, or it is `identity`.
+	// `invalid_scope`: the granted scope is the permissions of the user. If there is an actor,
+	// it is also intersected with the permissions of the agent. A requested scope that is not in the granted set fails.
+	// `invalid_scope` is also the code for an OIDC scope (`openid`, `profile`, `email`, `offline_access`),
+	// and for a scope that does not start with `<audience>:`.
+	// The response has no `refresh_token` and no `id_token`.
+	// The `exp` of the new token is not later than the `exp` of the subject token.
+	// The new token has `sub` of the user. If there is an actor, it has `act` with `principal_type` `agent`.
+	// The response has `issued_token_type`.
 	OAuthTokenWithFormdataBodyWithResponse(ctx context.Context, body OAuthTokenFormdataRequestBody, reqEditors ...RequestEditorFn) (*OAuthTokenResponse, error)
 
 	// OAuthUserinfoWithResponse performs a GET /oauth/userinfo (the `OAuthUserinfo` operationId) request.
@@ -4372,6 +6212,82 @@ type ClientWithResponsesInterface interface {
 	//
 	// Returns a wrapper object for the known response body format(s).
 	OAuthUserinfoWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*OAuthUserinfoResponse, error)
+
+	// AgentsListWithResponse performs a GET /v1/agents (the `AgentsList` operationId) request.
+	//
+	// List the agents.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	AgentsListWithResponse(ctx context.Context, params *AgentsListParams, reqEditors ...RequestEditorFn) (*AgentsListResponse, error)
+
+	// AgentsCreateWithBodyWithResponse performs a POST /v1/agents (the `AgentsCreate` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Create an agent. The token needs `identity:agent:write` and `identity:admin`.
+	// Error code of `Conflict`: `agent_name_taken`.
+	// Error codes of `UnprocessableContent`: `client_not_found` and `client_not_service`.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	AgentsCreateWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AgentsCreateResponse, error)
+
+	// AgentsCreateWithResponse performs a POST /v1/agents (the `AgentsCreate` operationId) request.
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Create an agent. The token needs `identity:agent:write` and `identity:admin`.
+	// Error code of `Conflict`: `agent_name_taken`.
+	// Error codes of `UnprocessableContent`: `client_not_found` and `client_not_service`.
+	AgentsCreateWithResponse(ctx context.Context, body AgentsCreateJSONRequestBody, reqEditors ...RequestEditorFn) (*AgentsCreateResponse, error)
+
+	// AgentsGetWithResponse performs a GET /v1/agents/{agentId} (the `AgentsGet` operationId) request.
+	//
+	// Get one agent. Error code of `NotFound`: `agent_not_found`.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	AgentsGetWithResponse(ctx context.Context, agentId string, reqEditors ...RequestEditorFn) (*AgentsGetResponse, error)
+
+	// AgentsUpdateWithBodyWithResponse performs a PATCH /v1/agents/{agentId} (the `AgentsUpdate` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Change an agent. The token needs `identity:agent:write` and `identity:admin`.
+	// Error code of `NotFound`: `agent_not_found`. Error code of `Conflict`: `agent_name_taken`.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	AgentsUpdateWithBodyWithResponse(ctx context.Context, agentId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AgentsUpdateResponse, error)
+
+	// AgentsUpdateWithResponse performs a PATCH /v1/agents/{agentId} (the `AgentsUpdate` operationId) request.
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Change an agent. The token needs `identity:agent:write` and `identity:admin`.
+	// Error code of `NotFound`: `agent_not_found`. Error code of `Conflict`: `agent_name_taken`.
+	AgentsUpdateWithResponse(ctx context.Context, agentId string, body AgentsUpdateJSONRequestBody, reqEditors ...RequestEditorFn) (*AgentsUpdateResponse, error)
+
+	// AgentRolesListWithResponse performs a GET /v1/agents/{agentId}/roles (the `AgentRolesList` operationId) request.
+	//
+	// List the roles of an agent.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	AgentRolesListWithResponse(ctx context.Context, agentId string, params *AgentRolesListParams, reqEditors ...RequestEditorFn) (*AgentRolesListResponse, error)
+
+	// AgentRolesRemoveWithResponse performs a DELETE /v1/agents/{agentId}/roles/{role} (the `AgentRolesRemove` operationId) request.
+	//
+	// Remove a role from an agent. A role that the agent does not have gives 204.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	AgentRolesRemoveWithResponse(ctx context.Context, agentId string, role RoleRef, reqEditors ...RequestEditorFn) (*AgentRolesRemoveResponse, error)
+
+	// AgentRolesAssignWithResponse performs a PUT /v1/agents/{agentId}/roles/{role} (the `AgentRolesAssign` operationId) request.
+	//
+	// Give a role to an agent. Error code of `UnprocessableContent`: `role_unknown`.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	AgentRolesAssignWithResponse(ctx context.Context, agentId string, role RoleRef, reqEditors ...RequestEditorFn) (*AgentRolesAssignResponse, error)
+
+	// ApiTokensRevokeWithResponse performs a DELETE /v1/api-tokens/{tokenId} (the `ApiTokensRevoke` operationId) request.
+	//
+	// Revoke the API token of any user. Error code of `NotFound`: `api_token_not_found`. Revoke of a revoked token gives 204.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	ApiTokensRevokeWithResponse(ctx context.Context, tokenId string, reqEditors ...RequestEditorFn) (*ApiTokensRevokeResponse, error)
 
 	// ClientsListWithResponse performs a GET /v1/clients (the `ClientsList` operationId) request.
 	//
@@ -4477,6 +6393,47 @@ type ClientWithResponsesInterface interface {
 	// Returns a wrapper object for the known response body format(s).
 	MeGetWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*MeGetResponse, error)
 
+	// MeApiTokensListWithResponse performs a GET /v1/me/api-tokens (the `MeApiTokensList` operationId) request.
+	//
+	// List the API tokens of the user. Error code of `Forbidden`: `user_token_required`.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	MeApiTokensListWithResponse(ctx context.Context, params *MeApiTokensListParams, reqEditors ...RequestEditorFn) (*MeApiTokensListResponse, error)
+
+	// MeApiTokensCreateWithBodyWithResponse performs a POST /v1/me/api-tokens (the `MeApiTokensCreate` operationId) request,
+	// with any type of body and a specified content type.
+	//
+	// Create a personal API token. The response has the token one time only.
+	// Error code of `Forbidden`: `user_token_required`.
+	// Error codes of `UnprocessableContent`: `scope_not_granted` and `token_limit`.
+	// `scope_not_granted` means that a requested scope is not a permission of the user.
+	// It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
+	// `token_limit` means that the user has the maximum number of active tokens,
+	// or the maximum number of token records that the service keeps. The service sets both limits.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	MeApiTokensCreateWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*MeApiTokensCreateResponse, error)
+
+	// MeApiTokensCreateWithResponse performs a POST /v1/me/api-tokens (the `MeApiTokensCreate` operationId) request.
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Create a personal API token. The response has the token one time only.
+	// Error code of `Forbidden`: `user_token_required`.
+	// Error codes of `UnprocessableContent`: `scope_not_granted` and `token_limit`.
+	// `scope_not_granted` means that a requested scope is not a permission of the user.
+	// It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
+	// `token_limit` means that the user has the maximum number of active tokens,
+	// or the maximum number of token records that the service keeps. The service sets both limits.
+	MeApiTokensCreateWithResponse(ctx context.Context, body MeApiTokensCreateJSONRequestBody, reqEditors ...RequestEditorFn) (*MeApiTokensCreateResponse, error)
+
+	// MeApiTokensRevokeWithResponse performs a DELETE /v1/me/api-tokens/{tokenId} (the `MeApiTokensRevoke` operationId) request.
+	//
+	// Revoke an API token of the user. A token of another user or an unknown ID gives 404 `api_token_not_found`.
+	// Revoke of a revoked token gives 204. Error code of `Forbidden`: `user_token_required`.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	MeApiTokensRevokeWithResponse(ctx context.Context, tokenId string, reqEditors ...RequestEditorFn) (*MeApiTokensRevokeResponse, error)
+
 	// PermissionManifestsListWithResponse performs a GET /v1/permission-manifests (the `PermissionManifestsList` operationId) request.
 	//
 	// List the stored manifests.
@@ -4576,6 +6533,13 @@ type ClientWithResponsesInterface interface {
 	// Change the name or the disabled state of a user. Error code of `Conflict`: `last_admin`.
 	UsersUpdateWithResponse(ctx context.Context, userId string, body UsersUpdateJSONRequestBody, reqEditors ...RequestEditorFn) (*UsersUpdateResponse, error)
 
+	// UserApiTokensListWithResponse performs a GET /v1/users/{userId}/api-tokens (the `UserApiTokensList` operationId) request.
+	//
+	// List the API tokens of a user. Error code of `NotFound`: `user_not_found`.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	UserApiTokensListWithResponse(ctx context.Context, userId string, params *UserApiTokensListParams, reqEditors ...RequestEditorFn) (*UserApiTokensListResponse, error)
+
 	// InvitesCreateWithResponse performs a POST /v1/users/{userId}/invites (the `InvitesCreate` operationId) request.
 	//
 	// Create a new invite for a user. An invite is only for a user with the status `invited`.
@@ -4589,6 +6553,8 @@ type ClientWithResponsesInterface interface {
 	// UserRolesListWithResponse performs a GET /v1/users/{userId}/roles (the `UserRolesList` operationId) request.
 	//
 	// List the roles of a user.
+	// Every active user also has the implicit role `identity:user`. It has no database row.
+	// The list shows it with the source `config`.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	UserRolesListWithResponse(ctx context.Context, userId string, params *UserRolesListParams, reqEditors ...RequestEditorFn) (*UserRolesListResponse, error)
@@ -4780,6 +6746,83 @@ func (r OAuthEndSessionResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r OAuthEndSessionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// OAuthIntrospectResponse200Headers the declared response headers of an HTTP 200 response for OAuthIntrospect
+type OAuthIntrospectResponse200Headers struct {
+	CacheControl string
+	Pragma       string
+}
+
+type OAuthIntrospectResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *IntrospectResponse
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *OAuthError
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *OAuthError
+	// JSON500 the response for an HTTP 500 `application/json` response
+	JSON500 *OAuthError
+	// JSON503 the response for an HTTP 503 `application/json` response
+	JSON503 *OAuthError
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *OAuthIntrospectResponse200Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r OAuthIntrospectResponse) GetJSON200() *IntrospectResponse {
+	return r.JSON200
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r OAuthIntrospectResponse) GetJSON400() *OAuthError {
+	return r.JSON400
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r OAuthIntrospectResponse) GetJSON401() *OAuthError {
+	return r.JSON401
+}
+
+// GetJSON500 returns the response for an HTTP 500 `application/json` response
+func (r OAuthIntrospectResponse) GetJSON500() *OAuthError {
+	return r.JSON500
+}
+
+// GetJSON503 returns the response for an HTTP 503 `application/json` response
+func (r OAuthIntrospectResponse) GetJSON503() *OAuthError {
+	return r.JSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r OAuthIntrospectResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r OAuthIntrospectResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r OAuthIntrospectResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r OAuthIntrospectResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -4982,6 +7025,614 @@ func (r OAuthUserinfoResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r OAuthUserinfoResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type AgentsListResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AgentPage
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r AgentsListResponse) GetJSON200() *AgentPage {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r AgentsListResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r AgentsListResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r AgentsListResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r AgentsListResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r AgentsListResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r AgentsListResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AgentsListResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AgentsListResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type AgentsCreateResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *Agent
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
+	ApplicationproblemJSON409 *Conflict
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *UnprocessableContent
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r AgentsCreateResponse) GetJSON201() *Agent {
+	return r.JSON201
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r AgentsCreateResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r AgentsCreateResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r AgentsCreateResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
+func (r AgentsCreateResponse) GetApplicationproblemJSON409() *Conflict {
+	return r.ApplicationproblemJSON409
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r AgentsCreateResponse) GetApplicationproblemJSON422() *UnprocessableContent {
+	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r AgentsCreateResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r AgentsCreateResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r AgentsCreateResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AgentsCreateResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AgentsCreateResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type AgentsGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Agent
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r AgentsGetResponse) GetJSON200() *Agent {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r AgentsGetResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r AgentsGetResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r AgentsGetResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r AgentsGetResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r AgentsGetResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r AgentsGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r AgentsGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AgentsGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AgentsGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type AgentsUpdateResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Agent
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
+	ApplicationproblemJSON409 *Conflict
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r AgentsUpdateResponse) GetJSON200() *Agent {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r AgentsUpdateResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r AgentsUpdateResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r AgentsUpdateResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r AgentsUpdateResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
+func (r AgentsUpdateResponse) GetApplicationproblemJSON409() *Conflict {
+	return r.ApplicationproblemJSON409
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r AgentsUpdateResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r AgentsUpdateResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r AgentsUpdateResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AgentsUpdateResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AgentsUpdateResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type AgentRolesListResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *RoleAssignmentPage
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r AgentRolesListResponse) GetJSON200() *RoleAssignmentPage {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r AgentRolesListResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r AgentRolesListResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r AgentRolesListResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r AgentRolesListResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r AgentRolesListResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r AgentRolesListResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r AgentRolesListResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AgentRolesListResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AgentRolesListResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type AgentRolesRemoveResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r AgentRolesRemoveResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r AgentRolesRemoveResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r AgentRolesRemoveResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r AgentRolesRemoveResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r AgentRolesRemoveResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r AgentRolesRemoveResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r AgentRolesRemoveResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AgentRolesRemoveResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AgentRolesRemoveResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type AgentRolesAssignResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *RoleAssignment
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *UnprocessableContent
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r AgentRolesAssignResponse) GetJSON200() *RoleAssignment {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r AgentRolesAssignResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r AgentRolesAssignResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r AgentRolesAssignResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r AgentRolesAssignResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r AgentRolesAssignResponse) GetApplicationproblemJSON422() *UnprocessableContent {
+	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r AgentRolesAssignResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r AgentRolesAssignResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r AgentRolesAssignResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AgentRolesAssignResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AgentRolesAssignResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ApiTokensRevokeResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r ApiTokensRevokeResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r ApiTokensRevokeResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r ApiTokensRevokeResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r ApiTokensRevokeResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r ApiTokensRevokeResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r ApiTokensRevokeResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ApiTokensRevokeResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ApiTokensRevokeResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ApiTokensRevokeResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -5790,6 +8441,228 @@ func (r MeGetResponse) ContentType() string {
 	return ""
 }
 
+type MeApiTokensListResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ApiTokenPage
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r MeApiTokensListResponse) GetJSON200() *ApiTokenPage {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r MeApiTokensListResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r MeApiTokensListResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r MeApiTokensListResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r MeApiTokensListResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r MeApiTokensListResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r MeApiTokensListResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r MeApiTokensListResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r MeApiTokensListResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// MeApiTokensCreateResponse201Headers the declared response headers of an HTTP 201 response for MeApiTokensCreate
+type MeApiTokensCreateResponse201Headers struct {
+	CacheControl string
+	Pragma       string
+}
+
+type MeApiTokensCreateResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *ApiTokenCreated
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *UnprocessableContent
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+	// Headers201 the parsed response headers for an HTTP 201 response
+	Headers201 *MeApiTokensCreateResponse201Headers
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r MeApiTokensCreateResponse) GetJSON201() *ApiTokenCreated {
+	return r.JSON201
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r MeApiTokensCreateResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r MeApiTokensCreateResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r MeApiTokensCreateResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r MeApiTokensCreateResponse) GetApplicationproblemJSON422() *UnprocessableContent {
+	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r MeApiTokensCreateResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r MeApiTokensCreateResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r MeApiTokensCreateResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r MeApiTokensCreateResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r MeApiTokensCreateResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type MeApiTokensRevokeResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r MeApiTokensRevokeResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r MeApiTokensRevokeResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r MeApiTokensRevokeResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r MeApiTokensRevokeResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r MeApiTokensRevokeResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r MeApiTokensRevokeResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r MeApiTokensRevokeResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r MeApiTokensRevokeResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r MeApiTokensRevokeResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type PermissionManifestsListResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -6544,6 +9417,82 @@ func (r UsersUpdateResponse) ContentType() string {
 	return ""
 }
 
+type UserApiTokensListResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ApiTokenPage
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r UserApiTokensListResponse) GetJSON200() *ApiTokenPage {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r UserApiTokensListResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r UserApiTokensListResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r UserApiTokensListResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r UserApiTokensListResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r UserApiTokensListResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r UserApiTokensListResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r UserApiTokensListResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UserApiTokensListResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UserApiTokensListResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 // InvitesCreateResponse201Headers the declared response headers of an HTTP 201 response for InvitesCreate
 type InvitesCreateResponse201Headers struct {
 	CacheControl string
@@ -7071,6 +10020,54 @@ func (c *ClientWithResponses) OAuthEndSessionWithResponse(ctx context.Context, p
 	return ParseOAuthEndSessionResponse(rsp)
 }
 
+// OAuthIntrospectWithBodyWithResponse performs a POST /oauth/introspect (the `OAuthIntrospect` operationId) request,
+// with any type of body and a specified content type.
+//
+// Introspect a token (RFC 7662). Only a service client with `private_key_jwt` can call it.
+// Any other caller gets 401 `invalid_client` and learns nothing about the token.
+// Other callers are a public client, a bad or missing assertion, `client_secret`, and `Authorization: Basic`.
+// A repeated form field gives `invalid_request`.
+// In some cases the identity service returns `active: false` and no other field. The cases are:
+// an unknown, expired, or revoked token, and a token of a disabled user.
+// Also a JWT, and a token with no scope for the caller app.
+// For an active token, `scope` is the stored scope of the token.
+// Intersect it with the current permissions of the user.
+// Then keep only the scopes that start with `<caller app>:`.
+// If the result is empty, the response is `{active:false}`. `aud` is the caller app.
+// The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) OAuthIntrospectWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*OAuthIntrospectResponse, error) {
+	rsp, err := c.OAuthIntrospectWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseOAuthIntrospectResponse(rsp)
+}
+
+// OAuthIntrospectWithFormdataBodyWithResponse performs a POST /oauth/introspect (the `OAuthIntrospect` operationId) request.
+// Takes a body of the `application/x-www-form-urlencoded` content type, and returns a wrapper object for the known response body format(s).
+//
+// Introspect a token (RFC 7662). Only a service client with `private_key_jwt` can call it.
+// Any other caller gets 401 `invalid_client` and learns nothing about the token.
+// Other callers are a public client, a bad or missing assertion, `client_secret`, and `Authorization: Basic`.
+// A repeated form field gives `invalid_request`.
+// In some cases the identity service returns `active: false` and no other field. The cases are:
+// an unknown, expired, or revoked token, and a token of a disabled user.
+// Also a JWT, and a token with no scope for the caller app.
+// For an active token, `scope` is the stored scope of the token.
+// Intersect it with the current permissions of the user.
+// Then keep only the scopes that start with `<caller app>:`.
+// If the result is empty, the response is `{active:false}`. `aud` is the caller app.
+// The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+func (c *ClientWithResponses) OAuthIntrospectWithFormdataBodyWithResponse(ctx context.Context, body OAuthIntrospectFormdataRequestBody, reqEditors ...RequestEditorFn) (*OAuthIntrospectResponse, error) {
+	rsp, err := c.OAuthIntrospectWithFormdataBody(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseOAuthIntrospectResponse(rsp)
+}
+
 // OAuthRevokeWithBodyWithResponse performs a POST /oauth/revoke (the `OAuthRevoke` operationId) request,
 // with any type of body and a specified content type.
 //
@@ -7102,9 +10099,37 @@ func (c *ClientWithResponses) OAuthRevokeWithFormdataBodyWithResponse(ctx contex
 // OAuthTokenWithBodyWithResponse performs a POST /oauth/token (the `OAuthToken` operationId) request,
 // with any type of body and a specified content type.
 //
-// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, or `refresh_token`.
+// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, `refresh_token`,
+// or `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693).
 // The `scope` of the request can have OIDC scopes. The `scope` of the response has permission keys only.
 // The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+//
+// Token exchange rules. The parameters `subject_token`, `subject_token_type`, `audience`, and `scope` are required.
+// `actor_token` and `actor_token_type` are optional and appear together.
+// `requested_token_type` is optional. Its only value is `urn:ietf:params:oauth:token-type:access_token`.
+// The actor token is the ID of an agent, not a signed token.
+// The error codes are:
+// `invalid_client` (401): only a service client with `private_key_jwt` can use the grant.
+// `unauthorized_client`: the client does not have the permission `identity:token:exchange`.
+// `invalid_request`: a repeated parameter, `actor_token` without `actor_token_type` or the reverse, or a missing required parameter.
+// `unsupported_token_type`: `subject_token_type` is not the access token URI,
+// or `actor_token_type` is not `urn:constellation:params:oauth:token-type:agent-id`,
+// or `requested_token_type` is not the access token URI.
+// `invalid_grant`: the subject token is not a JWT user access token (`typ` `at+jwt`) of the identity issuer,
+// or it is expired, or its `principal_type` is not `user`, or it has `act`, or its user does not exist or is disabled.
+// A service token, a token with `act`, an exchanged token, and an API token (`cpat_`) are not valid subject tokens.
+// `invalid_grant` is also the code if the `aud` of the subject token is not the `app` of the authenticated client.
+// `invalid_grant` is also the code if the agent does not exist, is disabled, or does not belong to the authenticated client.
+// The error text is the same for all three cases.
+// `invalid_target`: `audience` is not one app key, or it is `identity`.
+// `invalid_scope`: the granted scope is the permissions of the user. If there is an actor,
+// it is also intersected with the permissions of the agent. A requested scope that is not in the granted set fails.
+// `invalid_scope` is also the code for an OIDC scope (`openid`, `profile`, `email`, `offline_access`),
+// and for a scope that does not start with `<audience>:`.
+// The response has no `refresh_token` and no `id_token`.
+// The `exp` of the new token is not later than the `exp` of the subject token.
+// The new token has `sub` of the user. If there is an actor, it has `act` with `principal_type` `agent`.
+// The response has `issued_token_type`.
 //
 // Returns a wrapper object for the known response body format(s).
 func (c *ClientWithResponses) OAuthTokenWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*OAuthTokenResponse, error) {
@@ -7118,9 +10143,37 @@ func (c *ClientWithResponses) OAuthTokenWithBodyWithResponse(ctx context.Context
 // OAuthTokenWithFormdataBodyWithResponse performs a POST /oauth/token (the `OAuthToken` operationId) request.
 // Takes a body of the `application/x-www-form-urlencoded` content type, and returns a wrapper object for the known response body format(s).
 //
-// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, or `refresh_token`.
+// Get an access token. The `grant_type` is `client_credentials`, `authorization_code`, `refresh_token`,
+// or `urn:ietf:params:oauth:grant-type:token-exchange` (RFC 8693).
 // The `scope` of the request can have OIDC scopes. The `scope` of the response has permission keys only.
 // The response has the headers `Cache-Control: no-store` and `Pragma: no-cache`.
+//
+// Token exchange rules. The parameters `subject_token`, `subject_token_type`, `audience`, and `scope` are required.
+// `actor_token` and `actor_token_type` are optional and appear together.
+// `requested_token_type` is optional. Its only value is `urn:ietf:params:oauth:token-type:access_token`.
+// The actor token is the ID of an agent, not a signed token.
+// The error codes are:
+// `invalid_client` (401): only a service client with `private_key_jwt` can use the grant.
+// `unauthorized_client`: the client does not have the permission `identity:token:exchange`.
+// `invalid_request`: a repeated parameter, `actor_token` without `actor_token_type` or the reverse, or a missing required parameter.
+// `unsupported_token_type`: `subject_token_type` is not the access token URI,
+// or `actor_token_type` is not `urn:constellation:params:oauth:token-type:agent-id`,
+// or `requested_token_type` is not the access token URI.
+// `invalid_grant`: the subject token is not a JWT user access token (`typ` `at+jwt`) of the identity issuer,
+// or it is expired, or its `principal_type` is not `user`, or it has `act`, or its user does not exist or is disabled.
+// A service token, a token with `act`, an exchanged token, and an API token (`cpat_`) are not valid subject tokens.
+// `invalid_grant` is also the code if the `aud` of the subject token is not the `app` of the authenticated client.
+// `invalid_grant` is also the code if the agent does not exist, is disabled, or does not belong to the authenticated client.
+// The error text is the same for all three cases.
+// `invalid_target`: `audience` is not one app key, or it is `identity`.
+// `invalid_scope`: the granted scope is the permissions of the user. If there is an actor,
+// it is also intersected with the permissions of the agent. A requested scope that is not in the granted set fails.
+// `invalid_scope` is also the code for an OIDC scope (`openid`, `profile`, `email`, `offline_access`),
+// and for a scope that does not start with `<audience>:`.
+// The response has no `refresh_token` and no `id_token`.
+// The `exp` of the new token is not later than the `exp` of the subject token.
+// The new token has `sub` of the user. If there is an actor, it has `act` with `principal_type` `agent`.
+// The response has `issued_token_type`.
 func (c *ClientWithResponses) OAuthTokenWithFormdataBodyWithResponse(ctx context.Context, body OAuthTokenFormdataRequestBody, reqEditors ...RequestEditorFn) (*OAuthTokenResponse, error) {
 	rsp, err := c.OAuthTokenWithFormdataBody(ctx, body, reqEditors...)
 	if err != nil {
@@ -7144,6 +10197,142 @@ func (c *ClientWithResponses) OAuthUserinfoWithResponse(ctx context.Context, req
 		return nil, err
 	}
 	return ParseOAuthUserinfoResponse(rsp)
+}
+
+// AgentsListWithResponse performs a GET /v1/agents (the `AgentsList` operationId) request.
+//
+// List the agents.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) AgentsListWithResponse(ctx context.Context, params *AgentsListParams, reqEditors ...RequestEditorFn) (*AgentsListResponse, error) {
+	rsp, err := c.AgentsList(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAgentsListResponse(rsp)
+}
+
+// AgentsCreateWithBodyWithResponse performs a POST /v1/agents (the `AgentsCreate` operationId) request,
+// with any type of body and a specified content type.
+//
+// Create an agent. The token needs `identity:agent:write` and `identity:admin`.
+// Error code of `Conflict`: `agent_name_taken`.
+// Error codes of `UnprocessableContent`: `client_not_found` and `client_not_service`.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) AgentsCreateWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AgentsCreateResponse, error) {
+	rsp, err := c.AgentsCreateWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAgentsCreateResponse(rsp)
+}
+
+// AgentsCreateWithResponse performs a POST /v1/agents (the `AgentsCreate` operationId) request.
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Create an agent. The token needs `identity:agent:write` and `identity:admin`.
+// Error code of `Conflict`: `agent_name_taken`.
+// Error codes of `UnprocessableContent`: `client_not_found` and `client_not_service`.
+func (c *ClientWithResponses) AgentsCreateWithResponse(ctx context.Context, body AgentsCreateJSONRequestBody, reqEditors ...RequestEditorFn) (*AgentsCreateResponse, error) {
+	rsp, err := c.AgentsCreate(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAgentsCreateResponse(rsp)
+}
+
+// AgentsGetWithResponse performs a GET /v1/agents/{agentId} (the `AgentsGet` operationId) request.
+//
+// Get one agent. Error code of `NotFound`: `agent_not_found`.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) AgentsGetWithResponse(ctx context.Context, agentId string, reqEditors ...RequestEditorFn) (*AgentsGetResponse, error) {
+	rsp, err := c.AgentsGet(ctx, agentId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAgentsGetResponse(rsp)
+}
+
+// AgentsUpdateWithBodyWithResponse performs a PATCH /v1/agents/{agentId} (the `AgentsUpdate` operationId) request,
+// with any type of body and a specified content type.
+//
+// Change an agent. The token needs `identity:agent:write` and `identity:admin`.
+// Error code of `NotFound`: `agent_not_found`. Error code of `Conflict`: `agent_name_taken`.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) AgentsUpdateWithBodyWithResponse(ctx context.Context, agentId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AgentsUpdateResponse, error) {
+	rsp, err := c.AgentsUpdateWithBody(ctx, agentId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAgentsUpdateResponse(rsp)
+}
+
+// AgentsUpdateWithResponse performs a PATCH /v1/agents/{agentId} (the `AgentsUpdate` operationId) request.
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Change an agent. The token needs `identity:agent:write` and `identity:admin`.
+// Error code of `NotFound`: `agent_not_found`. Error code of `Conflict`: `agent_name_taken`.
+func (c *ClientWithResponses) AgentsUpdateWithResponse(ctx context.Context, agentId string, body AgentsUpdateJSONRequestBody, reqEditors ...RequestEditorFn) (*AgentsUpdateResponse, error) {
+	rsp, err := c.AgentsUpdate(ctx, agentId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAgentsUpdateResponse(rsp)
+}
+
+// AgentRolesListWithResponse performs a GET /v1/agents/{agentId}/roles (the `AgentRolesList` operationId) request.
+//
+// List the roles of an agent.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) AgentRolesListWithResponse(ctx context.Context, agentId string, params *AgentRolesListParams, reqEditors ...RequestEditorFn) (*AgentRolesListResponse, error) {
+	rsp, err := c.AgentRolesList(ctx, agentId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAgentRolesListResponse(rsp)
+}
+
+// AgentRolesRemoveWithResponse performs a DELETE /v1/agents/{agentId}/roles/{role} (the `AgentRolesRemove` operationId) request.
+//
+// Remove a role from an agent. A role that the agent does not have gives 204.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) AgentRolesRemoveWithResponse(ctx context.Context, agentId string, role RoleRef, reqEditors ...RequestEditorFn) (*AgentRolesRemoveResponse, error) {
+	rsp, err := c.AgentRolesRemove(ctx, agentId, role, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAgentRolesRemoveResponse(rsp)
+}
+
+// AgentRolesAssignWithResponse performs a PUT /v1/agents/{agentId}/roles/{role} (the `AgentRolesAssign` operationId) request.
+//
+// Give a role to an agent. Error code of `UnprocessableContent`: `role_unknown`.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) AgentRolesAssignWithResponse(ctx context.Context, agentId string, role RoleRef, reqEditors ...RequestEditorFn) (*AgentRolesAssignResponse, error) {
+	rsp, err := c.AgentRolesAssign(ctx, agentId, role, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAgentRolesAssignResponse(rsp)
+}
+
+// ApiTokensRevokeWithResponse performs a DELETE /v1/api-tokens/{tokenId} (the `ApiTokensRevoke` operationId) request.
+//
+// Revoke the API token of any user. Error code of `NotFound`: `api_token_not_found`. Revoke of a revoked token gives 204.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) ApiTokensRevokeWithResponse(ctx context.Context, tokenId string, reqEditors ...RequestEditorFn) (*ApiTokensRevokeResponse, error) {
+	rsp, err := c.ApiTokensRevoke(ctx, tokenId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseApiTokensRevokeResponse(rsp)
 }
 
 // ClientsListWithResponse performs a GET /v1/clients (the `ClientsList` operationId) request.
@@ -7328,6 +10517,71 @@ func (c *ClientWithResponses) MeGetWithResponse(ctx context.Context, reqEditors 
 	return ParseMeGetResponse(rsp)
 }
 
+// MeApiTokensListWithResponse performs a GET /v1/me/api-tokens (the `MeApiTokensList` operationId) request.
+//
+// List the API tokens of the user. Error code of `Forbidden`: `user_token_required`.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) MeApiTokensListWithResponse(ctx context.Context, params *MeApiTokensListParams, reqEditors ...RequestEditorFn) (*MeApiTokensListResponse, error) {
+	rsp, err := c.MeApiTokensList(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseMeApiTokensListResponse(rsp)
+}
+
+// MeApiTokensCreateWithBodyWithResponse performs a POST /v1/me/api-tokens (the `MeApiTokensCreate` operationId) request,
+// with any type of body and a specified content type.
+//
+// Create a personal API token. The response has the token one time only.
+// Error code of `Forbidden`: `user_token_required`.
+// Error codes of `UnprocessableContent`: `scope_not_granted` and `token_limit`.
+// `scope_not_granted` means that a requested scope is not a permission of the user.
+// It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
+// `token_limit` means that the user has the maximum number of active tokens,
+// or the maximum number of token records that the service keeps. The service sets both limits.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) MeApiTokensCreateWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*MeApiTokensCreateResponse, error) {
+	rsp, err := c.MeApiTokensCreateWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseMeApiTokensCreateResponse(rsp)
+}
+
+// MeApiTokensCreateWithResponse performs a POST /v1/me/api-tokens (the `MeApiTokensCreate` operationId) request.
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Create a personal API token. The response has the token one time only.
+// Error code of `Forbidden`: `user_token_required`.
+// Error codes of `UnprocessableContent`: `scope_not_granted` and `token_limit`.
+// `scope_not_granted` means that a requested scope is not a permission of the user.
+// It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
+// `token_limit` means that the user has the maximum number of active tokens,
+// or the maximum number of token records that the service keeps. The service sets both limits.
+func (c *ClientWithResponses) MeApiTokensCreateWithResponse(ctx context.Context, body MeApiTokensCreateJSONRequestBody, reqEditors ...RequestEditorFn) (*MeApiTokensCreateResponse, error) {
+	rsp, err := c.MeApiTokensCreate(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseMeApiTokensCreateResponse(rsp)
+}
+
+// MeApiTokensRevokeWithResponse performs a DELETE /v1/me/api-tokens/{tokenId} (the `MeApiTokensRevoke` operationId) request.
+//
+// Revoke an API token of the user. A token of another user or an unknown ID gives 404 `api_token_not_found`.
+// Revoke of a revoked token gives 204. Error code of `Forbidden`: `user_token_required`.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) MeApiTokensRevokeWithResponse(ctx context.Context, tokenId string, reqEditors ...RequestEditorFn) (*MeApiTokensRevokeResponse, error) {
+	rsp, err := c.MeApiTokensRevoke(ctx, tokenId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseMeApiTokensRevokeResponse(rsp)
+}
+
 // PermissionManifestsListWithResponse performs a GET /v1/permission-manifests (the `PermissionManifestsList` operationId) request.
 //
 // List the stored manifests.
@@ -7505,6 +10759,19 @@ func (c *ClientWithResponses) UsersUpdateWithResponse(ctx context.Context, userI
 	return ParseUsersUpdateResponse(rsp)
 }
 
+// UserApiTokensListWithResponse performs a GET /v1/users/{userId}/api-tokens (the `UserApiTokensList` operationId) request.
+//
+// List the API tokens of a user. Error code of `NotFound`: `user_not_found`.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) UserApiTokensListWithResponse(ctx context.Context, userId string, params *UserApiTokensListParams, reqEditors ...RequestEditorFn) (*UserApiTokensListResponse, error) {
+	rsp, err := c.UserApiTokensList(ctx, userId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUserApiTokensListResponse(rsp)
+}
+
 // InvitesCreateWithResponse performs a POST /v1/users/{userId}/invites (the `InvitesCreate` operationId) request.
 //
 // Create a new invite for a user. An invite is only for a user with the status `invited`.
@@ -7524,6 +10791,8 @@ func (c *ClientWithResponses) InvitesCreateWithResponse(ctx context.Context, use
 // UserRolesListWithResponse performs a GET /v1/users/{userId}/roles (the `UserRolesList` operationId) request.
 //
 // List the roles of a user.
+// Every active user also has the implicit role `identity:user`. It has no database row.
+// The list shows it with the source `config`.
 //
 // Returns a wrapper object for the known response body format(s).
 func (c *ClientWithResponses) UserRolesListWithResponse(ctx context.Context, userId string, params *UserRolesListParams, reqEditors ...RequestEditorFn) (*UserRolesListResponse, error) {
@@ -7691,6 +10960,80 @@ func ParseOAuthEndSessionResponse(rsp *http.Response) (*OAuthEndSessionResponse,
 			headers.Location = value
 		}
 		response.Headers302 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseOAuthIntrospectResponse parses an HTTP response from a OAuthIntrospectWithResponse call
+func ParseOAuthIntrospectResponse(rsp *http.Response) (*OAuthIntrospectResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &OAuthIntrospectResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest IntrospectResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest OAuthError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest OAuthError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest OAuthError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest OAuthError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers OAuthIntrospectResponse200Headers
+		if values := rsp.Header.Values("Cache-Control"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Cache-Control", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.CacheControl = value
+		}
+		if values := rsp.Header.Values("Pragma"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Pragma", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.Pragma = value
+		}
+		response.Headers200 = &headers
 	}
 
 	return response, nil
@@ -7887,6 +11230,500 @@ func ParseOAuthUserinfoResponse(rsp *http.Response) (*OAuthUserinfoResponse, err
 			headers.WWWAuthenticate = value
 		}
 		response.Headers403 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseAgentsListResponse parses an HTTP response from a AgentsListWithResponse call
+func ParseAgentsListResponse(rsp *http.Response) (*AgentsListResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AgentsListResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AgentPage
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseAgentsCreateResponse parses an HTTP response from a AgentsCreateWithResponse call
+func ParseAgentsCreateResponse(rsp *http.Response) (*AgentsCreateResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AgentsCreateResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Agent
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest UnprocessableContent
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseAgentsGetResponse parses an HTTP response from a AgentsGetWithResponse call
+func ParseAgentsGetResponse(rsp *http.Response) (*AgentsGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AgentsGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Agent
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseAgentsUpdateResponse parses an HTTP response from a AgentsUpdateWithResponse call
+func ParseAgentsUpdateResponse(rsp *http.Response) (*AgentsUpdateResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AgentsUpdateResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Agent
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseAgentRolesListResponse parses an HTTP response from a AgentRolesListWithResponse call
+func ParseAgentRolesListResponse(rsp *http.Response) (*AgentRolesListResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AgentRolesListResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RoleAssignmentPage
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseAgentRolesRemoveResponse parses an HTTP response from a AgentRolesRemoveWithResponse call
+func ParseAgentRolesRemoveResponse(rsp *http.Response) (*AgentRolesRemoveResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AgentRolesRemoveResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseAgentRolesAssignResponse parses an HTTP response from a AgentRolesAssignWithResponse call
+func ParseAgentRolesAssignResponse(rsp *http.Response) (*AgentRolesAssignResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AgentRolesAssignResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest RoleAssignment
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest UnprocessableContent
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseApiTokensRevokeResponse parses an HTTP response from a ApiTokensRevokeWithResponse call
+func ParseApiTokensRevokeResponse(rsp *http.Response) (*ApiTokensRevokeResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ApiTokensRevokeResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
 	}
 
 	return response, nil
@@ -8550,6 +12387,198 @@ func ParseMeGetResponse(rsp *http.Response) (*MeGetResponse, error) {
 	return response, nil
 }
 
+// ParseMeApiTokensListResponse parses an HTTP response from a MeApiTokensListWithResponse call
+func ParseMeApiTokensListResponse(rsp *http.Response) (*MeApiTokensListResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &MeApiTokensListResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ApiTokenPage
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseMeApiTokensCreateResponse parses an HTTP response from a MeApiTokensCreateWithResponse call
+func ParseMeApiTokensCreateResponse(rsp *http.Response) (*MeApiTokensCreateResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &MeApiTokensCreateResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest ApiTokenCreated
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest UnprocessableContent
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 201:
+		var headers MeApiTokensCreateResponse201Headers
+		if values := rsp.Header.Values("Cache-Control"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Cache-Control", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.CacheControl = value
+		}
+		if values := rsp.Header.Values("Pragma"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Pragma", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.Pragma = value
+		}
+		response.Headers201 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseMeApiTokensRevokeResponse parses an HTTP response from a MeApiTokensRevokeWithResponse call
+func ParseMeApiTokensRevokeResponse(rsp *http.Response) (*MeApiTokensRevokeResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &MeApiTokensRevokeResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParsePermissionManifestsListResponse parses an HTTP response from a PermissionManifestsListWithResponse call
 func ParsePermissionManifestsListResponse(rsp *http.Response) (*PermissionManifestsListResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -9156,6 +13185,67 @@ func ParseUsersUpdateResponse(rsp *http.Response) (*UsersUpdateResponse, error) 
 			return nil, err
 		}
 		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUserApiTokensListResponse parses an HTTP response from a UserApiTokensListWithResponse call
+func ParseUserApiTokensListResponse(rsp *http.Response) (*UserApiTokensListResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UserApiTokensListResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ApiTokenPage
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalServerError

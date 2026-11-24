@@ -32,6 +32,25 @@ type Actor struct {
 	Type PrincipalType
 }
 
+// TokenType is the kind of credential that a [Principal] came from.
+type TokenType string
+
+// Values of TokenType. The zero value is treated as [TokenTypeAccess].
+const (
+	// TokenTypeAccess is a JWT access token.
+	TokenTypeAccess TokenType = "access_token"
+	// TokenTypeAPI is a personal API token that the identity service checked.
+	TokenTypeAPI TokenType = "api_token"
+)
+
+// OrAccess returns the token type, or [TokenTypeAccess] for the zero value.
+func (t TokenType) OrAccess() TokenType {
+	if t == "" {
+		return TokenTypeAccess
+	}
+	return t
+}
+
 // Principal is the verified identity of the caller of a request.
 type Principal struct {
 	// ID is the subject of the token.
@@ -46,6 +65,9 @@ type Principal struct {
 	Audience string
 	// Act is the acting principal, or nil.
 	Act *Actor
+	// TokenType is the kind of token that the verifier accepted. The zero value
+	// means [TokenTypeAccess]. A service can refuse API tokens on some routes.
+	TokenType TokenType
 }
 
 // HasScopes reports whether the principal has all the scopes. It returns true
@@ -108,6 +130,10 @@ var (
 	ErrMissingScope = errors.New("auth: missing scope")
 	// ErrKeysUnavailable means the verifier has no signing keys.
 	ErrKeysUnavailable = errors.New("auth: signing keys unavailable")
+	// ErrIntrospectionUnavailable means the verifier cannot say if an API token
+	// is valid, for example because the identity service is down, the client
+	// is rejected, or the verifier is overloaded.
+	ErrIntrospectionUnavailable = errors.New("auth: introspection unavailable")
 )
 
 // Outcome returns the value of the outcome attribute of the metric
@@ -126,7 +152,19 @@ func Outcome(err error) string {
 		return "wrong_audience"
 	case errors.Is(err, ErrKeysUnavailable):
 		return "keys_unavailable"
+	case errors.Is(err, ErrIntrospectionUnavailable):
+		return "unavailable"
 	default:
 		return "invalid"
 	}
+}
+
+// ClientAssertion is the port that gives a private_key_jwt client assertion
+// (RFC 7523). The adapter auth/clientcred implements it.
+type ClientAssertion interface {
+	// ClientID returns the client ID of the service.
+	ClientID() string
+	// Assertion returns a private_key_jwt client assertion with the issuer as
+	// audience. Each call returns a new assertion with a new jti.
+	Assertion(ctx context.Context) (string, error)
 }

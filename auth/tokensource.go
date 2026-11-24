@@ -38,3 +38,27 @@ type OAuthError struct {
 func (e *OAuthError) Error() string {
 	return fmt.Sprintf("auth: token endpoint returned the OAuth error %q", e.Code)
 }
+
+// ExchangeRequest is the input of [TokenExchanger.Exchange].
+type ExchangeRequest struct {
+	// SubjectToken is the access token of the user.
+	SubjectToken string
+	// AgentID is the ID of the agent that acts for the user. It is empty for a
+	// token for the user only.
+	AgentID string
+	// Audience is the app that the new token is for.
+	Audience string
+	// Scopes are the permission keys that the new token needs. At least one.
+	Scopes []string
+}
+
+// TokenExchanger gets a token for a user, and optionally an agent that acts for
+// the user, with the token exchange grant (RFC 8693). The adapter
+// auth/clientcred implements it.
+//
+// Exchange returns [ErrNoScopes] if Scopes is empty and [ErrInvalidToken] if
+// SubjectToken is empty. It returns [ErrTokenUnavailable] when the identity
+// service is not available, and *[OAuthError] for an OAuth error response.
+type TokenExchanger interface {
+	Exchange(ctx context.Context, req ExchangeRequest) (string, error)
+}
