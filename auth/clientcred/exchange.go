@@ -78,9 +78,15 @@ func (s *Source) Exchange(ctx context.Context, req auth.ExchangeRequest) (string
 		}
 		tok, err := s.fetchExchange(context.WithoutCancel(ctx), key, req, scopes)
 		if err != nil {
-			// A failed refresh before the expiry keeps the cached token.
-			if old, ok := s.exchangeUnexpired(key); ok {
-				return old, nil
+			// A failed refresh before the expiry keeps the cached token only when
+			// the identity service is unavailable. An OAuth rejection or a bad
+			// response removes the entry and goes to the caller.
+			if errors.Is(err, auth.ErrTokenUnavailable) {
+				if old, ok := s.exchangeUnexpired(key); ok {
+					return old, nil
+				}
+			} else {
+				s.exchangeCache.Delete(key)
 			}
 		}
 		return tok, err

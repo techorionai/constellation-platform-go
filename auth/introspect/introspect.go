@@ -310,6 +310,16 @@ func (v *Verifier) Verify(ctx context.Context, token string) (auth.Principal, er
 	// The shared request does not stop when one caller stops. The HTTP client
 	// timeout limits it.
 	ch := v.flight.DoChan(key, func() (any, error) {
+		// A call that ran before this one can have filled the cache.
+		if e, ok := v.active.Get(key, v.clock()); ok {
+			return result{principal: e.principal}, nil
+		}
+		if v.inactive != nil {
+			if _, ok := v.inactive.Get(key, v.clock()); ok {
+				v.count(ctx, outcomeCachedInactive)
+				return result{err: fmt.Errorf("auth/introspect: token is not active: %w", auth.ErrInvalidToken)}, nil
+			}
+		}
 		select {
 		case v.slots <- struct{}{}:
 			defer func() { <-v.slots }()
@@ -323,7 +333,7 @@ func (v *Verifier) Verify(ctx context.Context, token string) (auth.Principal, er
 	})
 	select {
 	case <-ctx.Done():
-		return auth.Principal{}, ctx.Err()
+		return auth.Principal{}, fmt.Errorf("auth/introspect: caller stopped: %w: %w", auth.ErrIntrospectionUnavailable, ctx.Err())
 	case r := <-ch:
 		res := r.Val.(result)
 		if res.err != nil {

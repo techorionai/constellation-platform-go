@@ -439,3 +439,33 @@ func (f *fixture) exchangeOutcomes(t *testing.T) map[string]int64 {
 	}
 	return out
 }
+
+// R1: a refresh after 80 percent of the lifetime that gets an OAuth error
+// returns the error. The old token is not used and the entry is removed.
+func TestExchangeRefreshOAuthError(t *testing.T) {
+	for _, code := range []string{"invalid_grant", "invalid_scope", "unauthorized_client"} {
+		t.Run(code, func(t *testing.T) {
+			f := newExchangeFixture(t)
+			if _, err := f.src.Exchange(context.Background(), baseReq()); err != nil {
+				t.Fatal(err)
+			}
+			f.clock.advance(500 * time.Second) // after 80 percent, before expiry
+			f.ep.handler = func(w http.ResponseWriter, _ *http.Request, _ int) {
+				writeJSON(w, 400, map[string]any{"error": code})
+			}
+			got, err := f.src.Exchange(context.Background(), baseReq())
+			var oe *auth.OAuthError
+			if !errors.As(err, &oe) || got != "" {
+				t.Fatalf("got %q, err %v", got, err)
+			}
+			// The entry is removed. A second call goes to the endpoint again.
+			n := len(f.ep.requests())
+			if _, err := f.src.Exchange(context.Background(), baseReq()); !errors.As(err, &oe) {
+				t.Fatalf("second call: %v", err)
+			}
+			if len(f.ep.requests()) != n+1 {
+				t.Fatal("the old token stayed in the cache")
+			}
+		})
+	}
+}

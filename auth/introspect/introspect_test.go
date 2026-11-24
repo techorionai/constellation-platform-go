@@ -839,3 +839,21 @@ func TestU31InactiveDoesNotEvictActive(t *testing.T) {
 		t.Fatal("the inactive cache is larger than its limit")
 	}
 }
+
+// R3: a stopped caller gets ErrIntrospectionUnavailable. The cause stays in the chain.
+func TestVerifyCallerStopped(t *testing.T) {
+	f := newFixture(t, setup{})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	f.handler = func(w http.ResponseWriter, r *http.Request, n int) {
+		<-release
+		writeJSON(w, 200, map[string]any{"active": false})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := f.v.Verify(ctx, token(1))
+	if !errors.Is(err, auth.ErrIntrospectionUnavailable) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
