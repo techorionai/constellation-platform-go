@@ -856,4 +856,3 @@ func TestVerifyCallerStopped(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
-
