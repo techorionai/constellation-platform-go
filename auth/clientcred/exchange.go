@@ -52,9 +52,9 @@ type exchangeResponse struct {
 //
 // Errors: [auth.ErrInvalidToken] (empty subject token, or a value with a zero
 // byte), [auth.ErrNoScopes], [auth.ErrBadTokenResponse],
-// [auth.ErrTokenUnavailable] (see [auth.RetryAfter]), and *[auth.OAuthError]. Exchange never puts the
-// subject token, the new token, or the agent ID in an error, a span, a log, or a
-// metric.
+// [auth.ErrTokenUnavailable] (see [auth.RetryAfter]), and *[auth.OAuthError].
+// Exchange never puts the subject token, the new token, or the agent ID in an
+// error, a span, a log, or a metric.
 func (s *Source) Exchange(ctx context.Context, req auth.ExchangeRequest) (string, error) {
 	if req.SubjectToken == "" {
 		return "", auth.ErrInvalidToken
@@ -183,15 +183,17 @@ func (s *Source) requestExchange(ctx context.Context, key string, req auth.Excha
 		return "", outcomeNetworkError, fmt.Errorf("%w: %w", auth.ErrTokenUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	// The status and Retry-After come before the body checks. A 429 with a large
+	// body must still start the wait time.
+	if rerr := s.rateLimited(resp); rerr != nil {
+		return "", outcomeUnavailable, rerr
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return "", outcomeNetworkError, fmt.Errorf("%w: cannot read the response", auth.ErrTokenUnavailable)
 	}
 	if len(body) > maxResponseBytes {
 		return "", outcomeBadResponse, fmt.Errorf("%w: body is too large", auth.ErrBadTokenResponse)
-	}
-	if rerr := s.rateLimited(resp); rerr != nil {
-		return "", outcomeUnavailable, rerr
 	}
 	var tr exchangeResponse
 	parsed := json.Unmarshal(body, &tr) == nil

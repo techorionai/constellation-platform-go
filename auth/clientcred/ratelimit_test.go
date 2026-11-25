@@ -1,9 +1,11 @@
 package clientcred_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -239,5 +241,70 @@ func TestI17U24Exchange503(t *testing.T) {
 	wantRetry(t, err, 5*time.Second)
 	if n := len(f.ep.requests()); n != 1 {
 		t.Fatalf("requests = %d", n)
+	}
+}
+
+// Review R1: the wait time of the source has a maximum of 60 s, the same as the
+// Retry-After header of the middleware.
+func TestI17R1MaxWait(t *testing.T) {
+	f := newFixture(t, setup{})
+	f.ep.handler = respond(429, "3600", nil)
+	_, err := f.src.Token(context.Background(), "identity", "s:a:b")
+	wantRetry(t, err, time.Minute)
+	f.clock.advance(61 * time.Second)
+	f.ep.handler = nil
+	if _, err := f.src.Token(context.Background(), "other", "s:a:b"); err != nil {
+		t.Fatalf("after the maximum wait: %v", err)
+	}
+
+	g := newExchangeFixture(t)
+	g.ep.handler = respond(503, "99999", nil)
+	_, err = g.src.Exchange(context.Background(), baseReq())
+	wantRetry(t, err, time.Minute)
+	g.clock.advance(61 * time.Second)
+	g.ep.handler = func(w http.ResponseWriter, _ *http.Request, n int) { exchangeOK(w, n) }
+	if _, err := g.src.Exchange(context.Background(), baseReq()); err != nil {
+		t.Fatalf("exchange after the maximum wait: %v", err)
+	}
+}
+
+// Review R4: a 429 with a body that is too large still starts the wait time.
+func TestI17R4LargeBody429(t *testing.T) {
+	big := func(w http.ResponseWriter, _ *http.Request, _ int) {
+		w.Header().Set("Retry-After", "9")
+		w.WriteHeader(429)
+		_, _ = w.Write(bytes.Repeat([]byte("x"), 70<<10))
+	}
+	f := newFixture(t, setup{})
+	f.ep.handler = big
+	_, err := f.src.Token(context.Background(), "identity", "s:a:b")
+	wantRetry(t, err, 9*time.Second)
+	if got := f.outcomes(t); got["unavailable"] != 1 || got["bad_response"] != 0 {
+		t.Fatalf("outcomes = %v", got)
+	}
+	g := newExchangeFixture(t)
+	g.ep.handler = big
+	_, err = g.src.Exchange(context.Background(), baseReq())
+	wantRetry(t, err, 9*time.Second)
+}
+
+// Review R8: the source writes one warn record each 60 s for a wait time.
+func TestI17R8WarnLog(t *testing.T) {
+	f := newFixture(t, setup{})
+	f.ep.handler = respond(429, "5", nil)
+	for i := 0; i < 2; i++ {
+		_, _ = f.src.Token(context.Background(), "identity", "s:a:b")
+		f.clock.advance(6 * time.Second)
+	}
+	if n := strings.Count(f.logs.String(), "level=WARN"); n != 1 {
+		t.Fatalf("warn records = %d, logs = %s", n, f.logs.String())
+	}
+	if strings.Contains(f.logs.String(), "level=ERROR") {
+		t.Fatalf("logs = %s", f.logs.String())
+	}
+	f.clock.advance(time.Minute)
+	_, _ = f.src.Token(context.Background(), "identity", "s:a:b")
+	if n := strings.Count(f.logs.String(), "level=WARN"); n != 2 {
+		t.Fatalf("warn records = %d", n)
 	}
 }

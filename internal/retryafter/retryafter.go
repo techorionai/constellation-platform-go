@@ -65,9 +65,9 @@ func Clamp(d time.Duration) time.Duration {
 }
 
 // FromStatus returns the wait time of a response with this status and these
-// headers. The second result is true if
-// the status is 429, or the status is 503 and the header has a valid value. For
-// a 429 with no valid header, the duration is 0 and the result is true.
+// headers. The second result is true if the status is 429, or the status is
+// 503 and the header has a valid value. For a 429 with no valid header, the
+// duration is 0 and the result is true.
 func FromStatus(status int, h http.Header, now time.Time) (time.Duration, bool) {
 	switch status {
 	case http.StatusTooManyRequests:

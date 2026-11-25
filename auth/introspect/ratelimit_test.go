@@ -1,6 +1,7 @@
 package introspect_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -128,23 +129,37 @@ func TestI17U20LocalLimit(t *testing.T) {
 	if got := f.outcomes(t); got["overloaded"] != 3 {
 		t.Fatalf("outcomes = %v", got)
 	}
-	// U21: cached results do not use the limit.
-	f.clock.advance(time.Second)
+}
+
+// Issue 17 U21: cached results, positive and negative, do not use the local limit.
+func TestI17U21CacheNotLimited(t *testing.T) {
+	f := newFixture(t, setup{cfg: func(c *introspect.Config) { c.MaxCallsPerSecond = 2 }})
+	if _, err := f.v.Verify(context.Background(), token(1)); err != nil {
+		t.Fatal(err)
+	}
 	f.handler = func(w http.ResponseWriter, r *http.Request, n int) {
 		writeJSON(w, 200, map[string]any{"active": false})
 	}
 	if _, err := f.v.Verify(context.Background(), token(10)); !errors.Is(err, auth.ErrInvalidToken) {
 		t.Fatalf("err = %v", err)
 	}
-	if _, err := f.v.Verify(context.Background(), token(11)); err != nil && !errors.Is(err, auth.ErrInvalidToken) {
-		t.Fatalf("err = %v", err)
+	// The limit is full now. A new token gets the exact limit error.
+	_, err := f.v.Verify(context.Background(), token(11))
+	if !errors.Is(err, auth.ErrIntrospectionUnavailable) {
+		t.Fatalf("new token: err = %v", err)
 	}
-	// The limit is full now. The cached tokens still work.
+	if d, ok := auth.RetryAfter(err); !ok || d != time.Second {
+		t.Fatalf("RetryAfter = %v, %v", d, ok)
+	}
+	// The cached tokens still work, and they make no HTTP call.
 	if _, err := f.v.Verify(context.Background(), token(1)); err != nil {
 		t.Fatalf("positive cache: %v", err)
 	}
 	if _, err := f.v.Verify(context.Background(), token(10)); !errors.Is(err, auth.ErrInvalidToken) {
 		t.Fatalf("negative cache: %v", err)
+	}
+	if f.httpCalls() != 2 {
+		t.Fatalf("calls = %d, want 2", f.httpCalls())
 	}
 }
 
@@ -203,5 +218,43 @@ func TestI17U24Verifier503(t *testing.T) {
 	}
 	if g.httpCalls() != 2 {
 		t.Fatalf("calls = %d", g.httpCalls())
+	}
+}
+
+// Review R1: the wait time of the verifier has a maximum of 60 s, the same as the
+// Retry-After header of the middleware.
+func TestI17R1MaxWait(t *testing.T) {
+	for _, value := range []string{"3600", "99999"} {
+		f := newFixture(t, setup{})
+		f.handler = func(w http.ResponseWriter, r *http.Request, n int) {
+			w.Header().Set("Retry-After", value)
+			w.WriteHeader(503)
+		}
+		_, err := f.v.Verify(context.Background(), token(1))
+		if d, ok := auth.RetryAfter(err); !ok || d != time.Minute {
+			t.Fatalf("%s: RetryAfter = %v, %v", value, d, ok)
+		}
+		f.clock.advance(61 * time.Second)
+		f.handler = nil
+		if _, err := f.v.Verify(context.Background(), token(2)); err != nil {
+			t.Fatalf("%s: after the maximum wait: %v", value, err)
+		}
+	}
+}
+
+// Review R4: a 429 with a body that is too large still starts the wait time.
+func TestI17R4LargeBody429(t *testing.T) {
+	f := newFixture(t, setup{})
+	f.handler = func(w http.ResponseWriter, r *http.Request, n int) {
+		w.Header().Set("Retry-After", "9")
+		w.WriteHeader(429)
+		_, _ = w.Write(bytes.Repeat([]byte("x"), 70<<10))
+	}
+	_, err := f.v.Verify(context.Background(), token(1))
+	if d, ok := auth.RetryAfter(err); !ok || d != 9*time.Second {
+		t.Fatalf("RetryAfter = %v, %v, err = %v", d, ok, err)
+	}
+	if got := f.outcomes(t); got["unavailable"] != 1 || got["invalid_response"] != 0 {
+		t.Fatalf("outcomes = %v", got)
 	}
 }

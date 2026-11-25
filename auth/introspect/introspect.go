@@ -420,8 +420,13 @@ func (v *Verifier) fetch(ctx context.Context, key, token string) (auth.Principal
 	return p, err
 }
 
-// defaultWait is the wait time of a 429 with no valid Retry-After.
-const defaultWait = 5 * time.Second
+const (
+	// defaultWait is the wait time of a 429 with no valid Retry-After.
+	defaultWait = 5 * time.Second
+	// maxWait is the longest wait time of the verifier. It is the same as the
+	// maximum of the Retry-After header of the middleware.
+	maxWait = 60 * time.Second
+)
 
 // waiting returns an [auth.UnavailableError] with the remaining time if the wait
 // time of the verifier is not over. Otherwise it returns nil.
@@ -484,15 +489,10 @@ func (v *Verifier) request(ctx context.Context, key, token string) (auth.Princip
 		return auth.Principal{}, outcomeUnavailable, fmt.Errorf("auth/introspect: request failed: %w: %w", auth.ErrIntrospectionUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
-	if err != nil {
-		return auth.Principal{}, outcomeUnavailable, unavailable("cannot read the response")
-	}
-	if len(body) > maxResponseBytes {
-		v.logLimited("invalid_response", slog.LevelError, "auth/introspect: the response is too large")
-		return auth.Principal{}, outcomeInvalidResp, unavailable("the response is too large")
-	}
+	// The status and Retry-After come before the body checks. A 429 with a large
+	// body must still start the wait time.
 	if d, ok := retryafter.FromStatus(resp.StatusCode, resp.Header, v.clock()); ok {
+		d = min(d, maxWait)
 		v.startWait(d)
 		v.logLimited("rate_limited", slog.LevelWarn,
 			"auth/introspect: the identity service asks for a wait time",
@@ -501,6 +501,14 @@ func (v *Verifier) request(ctx context.Context, key, token string) (auth.Princip
 			Err:        unavailable(fmt.Sprintf("status %d", resp.StatusCode)),
 			RetryAfter: d,
 		}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return auth.Principal{}, outcomeUnavailable, unavailable("cannot read the response")
+	}
+	if len(body) > maxResponseBytes {
+		v.logLimited("invalid_response", slog.LevelError, "auth/introspect: the response is too large")
+		return auth.Principal{}, outcomeInvalidResp, unavailable("the response is too large")
 	}
 	var ir introspectResponse
 	parsed := json.Unmarshal(body, &ir) == nil
