@@ -30,6 +30,7 @@ import (
 	"github.com/techorionai/constellation-platform-go/auth"
 	"github.com/techorionai/constellation-platform-go/config"
 	"github.com/techorionai/constellation-platform-go/internal/lru"
+	"github.com/techorionai/constellation-platform-go/internal/retryafter"
 )
 
 var (
@@ -204,6 +205,10 @@ type Source struct {
 	mu     sync.Mutex
 	cache  map[string]entry
 	flight singleflight.Group
+	// notBefore is the time before which the source makes no token request. The
+	// identity service counts all token requests of one client ID in one bucket,
+	// so one wait time is for all cache keys and for the exchange.
+	notBefore time.Time
 
 	exchangeCache  *lru.Cache[string, entry]
 	exchangeFlight singleflight.Group
@@ -263,8 +268,12 @@ func New(cfg Config, opts ...Option) (*Source, error) {
 // Token returns an access token for the audience and the scopes. It uses the
 // cache when it can. It does not retry.
 //
+// A response with status 429, or with status 503 and a valid Retry-After header,
+// starts a wait time for the whole source. Until it ends, Token makes no HTTP
+// call. It returns the unexpired cached token, or an [auth.UnavailableError].
+//
 // Errors: [auth.ErrNoScopes], [auth.ErrBadTokenResponse],
-// [auth.ErrTokenUnavailable], and *[auth.OAuthError].
+// [auth.ErrTokenUnavailable] (see [auth.RetryAfter]), and *[auth.OAuthError].
 func (s *Source) Token(ctx context.Context, audience string, scopes ...string) (string, error) {
 	scopes = normalize(scopes)
 	if len(scopes) == 0 {
@@ -274,11 +283,23 @@ func (s *Source) Token(ctx context.Context, audience string, scopes ...string) (
 	if tok, ok := s.cached(key); ok {
 		return tok, nil
 	}
+	if werr := s.waiting(); werr != nil {
+		if old, valid := s.unexpired(key); valid {
+			return old, nil
+		}
+		return "", werr
+	}
 	// The shared request does not stop when one caller stops. The HTTP client
 	// timeout limits it.
 	ch := s.flight.DoChan(key, func() (any, error) {
 		if tok, ok := s.cached(key); ok {
 			return tok, nil
+		}
+		if werr := s.waiting(); werr != nil {
+			if old, valid := s.unexpired(key); valid {
+				return old, nil
+			}
+			return "", werr
 		}
 		tok, err := s.fetch(context.WithoutCancel(ctx), key, audience, scopes)
 		if err != nil {
@@ -298,6 +319,45 @@ func (s *Source) Token(ctx context.Context, audience string, scopes ...string) (
 			return "", r.Err
 		}
 		return r.Val.(string), nil
+	}
+}
+
+// defaultWait is the wait time of a 429 with no valid Retry-After.
+const defaultWait = 5 * time.Second
+
+// waiting returns an [auth.UnavailableError] with the remaining time if the wait
+// time of the source is not over. Otherwise it returns nil.
+func (s *Source) waiting() error {
+	s.mu.Lock()
+	nb := s.notBefore
+	s.mu.Unlock()
+	if rem := nb.Sub(s.clock()); rem > 0 {
+		return &auth.UnavailableError{Err: auth.ErrTokenUnavailable, RetryAfter: rem}
+	}
+	return nil
+}
+
+// rateLimited handles a response with status 429, or 503 with a valid
+// Retry-After. It starts the wait time and returns the error. It returns nil for
+// any other response.
+func (s *Source) rateLimited(resp *http.Response) error {
+	d, ok := retryafter.FromStatus(resp.StatusCode, resp.Header, s.clock())
+	if !ok {
+		return nil
+	}
+	w := d
+	if w <= 0 {
+		w = defaultWait
+	}
+	nb := s.clock().Add(w)
+	s.mu.Lock()
+	if nb.After(s.notBefore) {
+		s.notBefore = nb
+	}
+	s.mu.Unlock()
+	return &auth.UnavailableError{
+		Err:        fmt.Errorf("%w: status %d", auth.ErrTokenUnavailable, resp.StatusCode),
+		RetryAfter: d,
 	}
 }
 
@@ -426,6 +486,9 @@ func (s *Source) request(ctx context.Context, key, audience string, scopes []str
 	}
 	if len(body) > maxResponseBytes {
 		return "", outcomeBadResponse, fmt.Errorf("%w: body is too large", auth.ErrBadTokenResponse)
+	}
+	if rerr := s.rateLimited(resp); rerr != nil {
+		return "", outcomeUnavailable, rerr
 	}
 	var tr tokenResponse
 	parsed := json.Unmarshal(body, &tr) == nil
