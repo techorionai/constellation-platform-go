@@ -11,7 +11,9 @@ paths:
   /.well-known/jwks.json:
     get:
       operationId: Discovery_jwks
-      description: Get the public keys that verify the tokens of the service.
+      description: |-
+        Get the public keys that verify the tokens of the service.
+        Error code of `TooManyRequests`: `rate_limited`.
       parameters: []
       responses:
         '200':
@@ -20,12 +22,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/JsonWebKeySet'
+        '429':
+          description: The client sent too many requests.
+          headers:
+            Retry-After:
+              required: true
+              description: Seconds to wait before the next request.
+              schema:
+                type: integer
+                format: int32
+                minimum: 0
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/TooManyRequests'
       security:
         - {}
   /.well-known/openid-configuration:
     get:
       operationId: Discovery_openidConfiguration
-      description: Get the OIDC discovery document.
+      description: |-
+        Get the OIDC discovery document.
+        Error code of `TooManyRequests`: `rate_limited`.
       parameters: []
       responses:
         '200':
@@ -34,6 +52,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DiscoveryDocument'
+        '429':
+          description: The client sent too many requests.
+          headers:
+            Retry-After:
+              required: true
+              description: Seconds to wait before the next request.
+              schema:
+                type: integer
+                format: int32
+                minimum: 0
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/TooManyRequests'
       security:
         - {}
   /oauth/authorize:
@@ -125,6 +157,40 @@ paths:
               description: The URL to go to.
               schema:
                 type: string
+        '429':
+          description: |-
+            A page that tells a person in a browser to try again later. The service limits the rate of requests.
+            The status, the body, and `Retry-After` do not change when a `client_id` or a user exists or does not exist.
+            The response does not give the limit key, the limit value, or the remaining requests.
+            The emitter writes the body as an inline string schema. The generated file has no named schema for this model.
+          headers:
+            Retry-After:
+              required: true
+              description: Seconds to wait before the next request.
+              schema:
+                type: integer
+                format: int32
+                minimum: 1
+          content:
+            text/html:
+              schema:
+                type: string
+        '503':
+          description: |-
+            A page that tells a person in a browser to try again later. The service cannot do the request now.
+            The emitter writes the body as an inline string schema. The generated file has no named schema for this model.
+          headers:
+            Retry-After:
+              required: false
+              description: Seconds to wait before the next request.
+              schema:
+                type: integer
+                format: int32
+                minimum: 1
+          content:
+            text/html:
+              schema:
+                type: string
       security:
         - {}
   /oauth/end_session:
@@ -165,6 +231,40 @@ paths:
             location:
               required: true
               description: The URL to go to.
+              schema:
+                type: string
+        '429':
+          description: |-
+            A page that tells a person in a browser to try again later. The service limits the rate of requests.
+            The status, the body, and `Retry-After` do not change when a `client_id` or a user exists or does not exist.
+            The response does not give the limit key, the limit value, or the remaining requests.
+            The emitter writes the body as an inline string schema. The generated file has no named schema for this model.
+          headers:
+            Retry-After:
+              required: true
+              description: Seconds to wait before the next request.
+              schema:
+                type: integer
+                format: int32
+                minimum: 1
+          content:
+            text/html:
+              schema:
+                type: string
+        '503':
+          description: |-
+            A page that tells a person in a browser to try again later. The service cannot do the request now.
+            The emitter writes the body as an inline string schema. The generated file has no named schema for this model.
+          headers:
+            Retry-After:
+              required: false
+              description: Seconds to wait before the next request.
+              schema:
+                type: integer
+                format: int32
+                minimum: 1
+          content:
+            text/html:
               schema:
                 type: string
       security:
@@ -212,7 +312,9 @@ paths:
           description: |-
             Error body of an OAuth operation (RFC 6749 section 5.2).
             The status is 400, except for these codes. `invalid_client` is 401.
-            `server_error` is 500. `temporarily_unavailable` is 503.
+            `server_error` is 500. `temporarily_unavailable` is 503 when the service cannot do the request now.
+            `temporarily_unavailable` is 429 for a rate limit (model `OAuthTooManyRequests`).
+            The client can try again after `Retry-After` of a 429 response. A 503 response of this model has no `Retry-After`.
           content:
             application/json:
               schema:
@@ -221,16 +323,53 @@ paths:
           description: |-
             Error body of an OAuth operation (RFC 6749 section 5.2).
             The status is 400, except for these codes. `invalid_client` is 401.
-            `server_error` is 500. `temporarily_unavailable` is 503.
+            `server_error` is 500. `temporarily_unavailable` is 503 when the service cannot do the request now.
+            `temporarily_unavailable` is 429 for a rate limit (model `OAuthTooManyRequests`).
+            The client can try again after `Retry-After` of a 429 response. A 503 response of this model has no `Retry-After`.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/OAuthError'
+        '429':
+          description: |-
+            An OAuth operation limits the rate of requests (RFC 6749 section 5.2).
+            The `error` is `temporarily_unavailable`. The client tries again after `Retry-After`.
+            The body has the same fields as `OAuthError`.
+            The status, the body, and `Retry-After` do not change when a `client_id` or a user exists or does not exist.
+            The response does not give the limit key, the limit value, or the remaining requests.
+          headers:
+            Retry-After:
+              required: true
+              description: Seconds to wait before the next request.
+              schema:
+                type: integer
+                format: int32
+                minimum: 1
+            Cache-Control:
+              required: true
+              description: The response has the value `no-store`.
+              schema:
+                type: string
+                enum:
+                  - no-store
+            Pragma:
+              required: true
+              description: The response has the value `no-cache`.
+              schema:
+                type: string
+                enum:
+                  - no-cache
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthTooManyRequests'
         '500':
           description: |-
             Error body of an OAuth operation (RFC 6749 section 5.2).
             The status is 400, except for these codes. `invalid_client` is 401.
-            `server_error` is 500. `temporarily_unavailable` is 503.
+            `server_error` is 500. `temporarily_unavailable` is 503 when the service cannot do the request now.
+            `temporarily_unavailable` is 429 for a rate limit (model `OAuthTooManyRequests`).
+            The client can try again after `Retry-After` of a 429 response. A 503 response of this model has no `Retry-After`.
           content:
             application/json:
               schema:
@@ -239,7 +378,9 @@ paths:
           description: |-
             Error body of an OAuth operation (RFC 6749 section 5.2).
             The status is 400, except for these codes. `invalid_client` is 401.
-            `server_error` is 500. `temporarily_unavailable` is 503.
+            `server_error` is 500. `temporarily_unavailable` is 503 when the service cannot do the request now.
+            `temporarily_unavailable` is 429 for a rate limit (model `OAuthTooManyRequests`).
+            The client can try again after `Retry-After` of a 429 response. A 503 response of this model has no `Retry-After`.
           content:
             application/json:
               schema:
@@ -266,7 +407,9 @@ paths:
           description: |-
             Error body of an OAuth operation (RFC 6749 section 5.2).
             The status is 400, except for these codes. `invalid_client` is 401.
-            `server_error` is 500. `temporarily_unavailable` is 503.
+            `server_error` is 500. `temporarily_unavailable` is 503 when the service cannot do the request now.
+            `temporarily_unavailable` is 429 for a rate limit (model `OAuthTooManyRequests`).
+            The client can try again after `Retry-After` of a 429 response. A 503 response of this model has no `Retry-After`.
           content:
             application/json:
               schema:
@@ -275,16 +418,53 @@ paths:
           description: |-
             Error body of an OAuth operation (RFC 6749 section 5.2).
             The status is 400, except for these codes. `invalid_client` is 401.
-            `server_error` is 500. `temporarily_unavailable` is 503.
+            `server_error` is 500. `temporarily_unavailable` is 503 when the service cannot do the request now.
+            `temporarily_unavailable` is 429 for a rate limit (model `OAuthTooManyRequests`).
+            The client can try again after `Retry-After` of a 429 response. A 503 response of this model has no `Retry-After`.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/OAuthError'
+        '429':
+          description: |-
+            An OAuth operation limits the rate of requests (RFC 6749 section 5.2).
+            The `error` is `temporarily_unavailable`. The client tries again after `Retry-After`.
+            The body has the same fields as `OAuthError`.
+            The status, the body, and `Retry-After` do not change when a `client_id` or a user exists or does not exist.
+            The response does not give the limit key, the limit value, or the remaining requests.
+          headers:
+            Retry-After:
+              required: true
+              description: Seconds to wait before the next request.
+              schema:
+                type: integer
+                format: int32
+                minimum: 1
+            Cache-Control:
+              required: true
+              description: The response has the value `no-store`.
+              schema:
+                type: string
+                enum:
+                  - no-store
+            Pragma:
+              required: true
+              description: The response has the value `no-cache`.
+              schema:
+                type: string
+                enum:
+                  - no-cache
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthTooManyRequests'
         '500':
           description: |-
             Error body of an OAuth operation (RFC 6749 section 5.2).
             The status is 400, except for these codes. `invalid_client` is 401.
-            `server_error` is 500. `temporarily_unavailable` is 503.
+            `server_error` is 500. `temporarily_unavailable` is 503 when the service cannot do the request now.
+            `temporarily_unavailable` is 429 for a rate limit (model `OAuthTooManyRequests`).
+            The client can try again after `Retry-After` of a 429 response. A 503 response of this model has no `Retry-After`.
           content:
             application/json:
               schema:
@@ -293,7 +473,9 @@ paths:
           description: |-
             Error body of an OAuth operation (RFC 6749 section 5.2).
             The status is 400, except for these codes. `invalid_client` is 401.
-            `server_error` is 500. `temporarily_unavailable` is 503.
+            `server_error` is 500. `temporarily_unavailable` is 503 when the service cannot do the request now.
+            `temporarily_unavailable` is 429 for a rate limit (model `OAuthTooManyRequests`).
+            The client can try again after `Retry-After` of a 429 response. A 503 response of this model has no `Retry-After`.
           content:
             application/json:
               schema:
@@ -368,7 +550,9 @@ paths:
           description: |-
             Error body of an OAuth operation (RFC 6749 section 5.2).
             The status is 400, except for these codes. `invalid_client` is 401.
-            `server_error` is 500. `temporarily_unavailable` is 503.
+            `server_error` is 500. `temporarily_unavailable` is 503 when the service cannot do the request now.
+            `temporarily_unavailable` is 429 for a rate limit (model `OAuthTooManyRequests`).
+            The client can try again after `Retry-After` of a 429 response. A 503 response of this model has no `Retry-After`.
           content:
             application/json:
               schema:
@@ -377,16 +561,53 @@ paths:
           description: |-
             Error body of an OAuth operation (RFC 6749 section 5.2).
             The status is 400, except for these codes. `invalid_client` is 401.
-            `server_error` is 500. `temporarily_unavailable` is 503.
+            `server_error` is 500. `temporarily_unavailable` is 503 when the service cannot do the request now.
+            `temporarily_unavailable` is 429 for a rate limit (model `OAuthTooManyRequests`).
+            The client can try again after `Retry-After` of a 429 response. A 503 response of this model has no `Retry-After`.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/OAuthError'
+        '429':
+          description: |-
+            An OAuth operation limits the rate of requests (RFC 6749 section 5.2).
+            The `error` is `temporarily_unavailable`. The client tries again after `Retry-After`.
+            The body has the same fields as `OAuthError`.
+            The status, the body, and `Retry-After` do not change when a `client_id` or a user exists or does not exist.
+            The response does not give the limit key, the limit value, or the remaining requests.
+          headers:
+            Retry-After:
+              required: true
+              description: Seconds to wait before the next request.
+              schema:
+                type: integer
+                format: int32
+                minimum: 1
+            Cache-Control:
+              required: true
+              description: The response has the value `no-store`.
+              schema:
+                type: string
+                enum:
+                  - no-store
+            Pragma:
+              required: true
+              description: The response has the value `no-cache`.
+              schema:
+                type: string
+                enum:
+                  - no-cache
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthTooManyRequests'
         '500':
           description: |-
             Error body of an OAuth operation (RFC 6749 section 5.2).
             The status is 400, except for these codes. `invalid_client` is 401.
-            `server_error` is 500. `temporarily_unavailable` is 503.
+            `server_error` is 500. `temporarily_unavailable` is 503 when the service cannot do the request now.
+            `temporarily_unavailable` is 429 for a rate limit (model `OAuthTooManyRequests`).
+            The client can try again after `Retry-After` of a 429 response. A 503 response of this model has no `Retry-After`.
           content:
             application/json:
               schema:
@@ -395,7 +616,9 @@ paths:
           description: |-
             Error body of an OAuth operation (RFC 6749 section 5.2).
             The status is 400, except for these codes. `invalid_client` is 401.
-            `server_error` is 500. `temporarily_unavailable` is 503.
+            `server_error` is 500. `temporarily_unavailable` is 503 when the service cannot do the request now.
+            `temporarily_unavailable` is 429 for a rate limit (model `OAuthTooManyRequests`).
+            The client can try again after `Retry-After` of a 429 response. A 503 response of this model has no `Retry-After`.
           content:
             application/json:
               schema:
@@ -458,6 +681,69 @@ paths:
               description: Challenge, for example `Bearer error="insufficient_scope"`.
               schema:
                 type: string
+        '429':
+          description: |-
+            An OAuth operation limits the rate of requests (RFC 6749 section 5.2).
+            The `error` is `temporarily_unavailable`. The client tries again after `Retry-After`.
+            The body has the same fields as `OAuthError`.
+            The status, the body, and `Retry-After` do not change when a `client_id` or a user exists or does not exist.
+            The response does not give the limit key, the limit value, or the remaining requests.
+          headers:
+            Retry-After:
+              required: true
+              description: Seconds to wait before the next request.
+              schema:
+                type: integer
+                format: int32
+                minimum: 1
+            Cache-Control:
+              required: true
+              description: The response has the value `no-store`.
+              schema:
+                type: string
+                enum:
+                  - no-store
+            Pragma:
+              required: true
+              description: The response has the value `no-cache`.
+              schema:
+                type: string
+                enum:
+                  - no-cache
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthTooManyRequests'
+        '503':
+          description: |-
+            An OAuth operation cannot do the request now, for example because the rate limiter is not available.
+            The `error` is `temporarily_unavailable`. The body has the same fields as `OAuthError`.
+          headers:
+            Retry-After:
+              required: false
+              description: Seconds to wait before the next request.
+              schema:
+                type: integer
+                format: int32
+                minimum: 1
+            Cache-Control:
+              required: true
+              description: The response has the value `no-store`.
+              schema:
+                type: string
+                enum:
+                  - no-store
+            Pragma:
+              required: true
+              description: The response has the value `no-cache`.
+              schema:
+                type: string
+                enum:
+                  - no-cache
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthServiceUnavailable'
   /v1/agents:
     post:
       operationId: Agents_create
@@ -1451,6 +1737,7 @@ paths:
         It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
         `token_limit` means that the user has the maximum number of active tokens,
         or the maximum number of token records that the service keeps. The service sets both limits.
+        Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
       parameters: []
       responses:
         '201':
@@ -1498,12 +1785,32 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/UnprocessableContent'
+        '429':
+          description: The client sent too many requests.
+          headers:
+            Retry-After:
+              required: true
+              description: Seconds to wait before the next request.
+              schema:
+                type: integer
+                format: int32
+                minimum: 0
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/TooManyRequests'
         '500':
           description: The server has an internal error.
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/InternalServerError'
+        '503':
+          description: The service is not available.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ServiceUnavailable'
       requestBody:
         required: true
         content:
@@ -1646,6 +1953,7 @@ paths:
         The caller must be a service client of that app. The app `identity` is not allowed.
         Error codes of `UnprocessableContent`: `manifest_app_mismatch`, `permission_app_mismatch`,
         `role_permission_unknown`, and `duplicate_key`.
+        Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
       parameters:
         - name: app
           in: path
@@ -1683,12 +1991,32 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/UnprocessableContent'
+        '429':
+          description: The client sent too many requests.
+          headers:
+            Retry-After:
+              required: true
+              description: Seconds to wait before the next request.
+              schema:
+                type: integer
+                format: int32
+                minimum: 0
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/TooManyRequests'
         '500':
           description: The server has an internal error.
           content:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/InternalServerError'
+        '503':
+          description: The service is not available.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ServiceUnavailable'
       requestBody:
         required: true
         content:
@@ -3213,7 +3541,9 @@ components:
       description: |-
         Error body of an OAuth operation (RFC 6749 section 5.2).
         The status is 400, except for these codes. `invalid_client` is 401.
-        `server_error` is 500. `temporarily_unavailable` is 503.
+        `server_error` is 500. `temporarily_unavailable` is 503 when the service cannot do the request now.
+        `temporarily_unavailable` is 429 for a rate limit (model `OAuthTooManyRequests`).
+        The client can try again after `Retry-After` of a 429 response. A 503 response of this model has no `Retry-After`.
     OAuthErrorCode:
       anyOf:
         - type: string
@@ -3230,6 +3560,39 @@ components:
             - server_error
         - type: string
       description: Error code of an OAuth operation. The union is open.
+    OAuthServiceUnavailable:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/OAuthErrorCode'
+          description: The error code. It is `temporarily_unavailable`.
+        error_description:
+          type: string
+          description: Text for a developer. It has no internal data and no secret.
+      description: |-
+        An OAuth operation cannot do the request now, for example because the rate limiter is not available.
+        The `error` is `temporarily_unavailable`. The body has the same fields as `OAuthError`.
+    OAuthTooManyRequests:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/OAuthErrorCode'
+          description: The error code. It is `temporarily_unavailable`.
+        error_description:
+          type: string
+          description: Text for a developer. It has no internal data and no secret.
+      description: |-
+        An OAuth operation limits the rate of requests (RFC 6749 section 5.2).
+        The `error` is `temporarily_unavailable`. The client tries again after `Retry-After`.
+        The body has the same fields as `OAuthError`.
+        The status, the body, and `Retry-After` do not change when a `client_id` or a user exists or does not exist.
+        The response does not give the limit key, the limit value, or the remaining requests.
     PermissionDefinition:
       type: object
       required:

@@ -8,15 +8,19 @@ import (
 	"github.com/techorionai/constellation-platform-go/clients/identity"
 )
 
-// Issue 15 U29: the generated client has the introspection operation and the
+// Issue 17 U28 (and issue 15 U29): the generated client has the introspection operation and the
 // open union IntrospectTokenTypeHint. TokenTypeHint has the values of v0.2.0.
-func TestU29ContractV030(t *testing.T) {
+func TestU28ContractV040(t *testing.T) {
 	raw, err := os.ReadFile("../../api/openapi/CONTRACTS_VERSION")
-	if err != nil || strings.TrimSpace(string(raw)) != "v0.3.0" {
+	if err != nil || strings.TrimSpace(string(raw)) != "v0.4.0" {
 		t.Fatalf("CONTRACTS_VERSION = %q, %v", raw, err)
 	}
 	// The code compiles only if the generated names exist.
 	_ = (*identity.ClientWithResponses).OAuthIntrospectWithFormdataBodyWithResponse
+	// v0.4.0: the publish operation has the 429 and 503 responses.
+	var pub identity.PermissionManifestsPublishResponse
+	_, _ = pub.ApplicationproblemJSON429, pub.ApplicationproblemJSON503
+	_ = pub.Headers429
 	var req identity.IntrospectRequest
 	var hint identity.IntrospectTokenTypeHint
 	if err := hint.FromIntrospectTokenTypeHint0(identity.IntrospectTokenTypeHint0ApiToken); err != nil {
