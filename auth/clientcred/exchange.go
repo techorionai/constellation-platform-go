@@ -47,11 +47,14 @@ type exchangeResponse struct {
 // the cache when it can, and it does not retry. The client needs the permission
 // identity:token:exchange and must be a service client with private_key_jwt.
 //
+// During the wait time of the source (see [Source.Token]), Exchange makes no
+// HTTP call. It returns the unexpired cached token, or an [auth.UnavailableError].
+//
 // Errors: [auth.ErrInvalidToken] (empty subject token, or a value with a zero
 // byte), [auth.ErrNoScopes], [auth.ErrBadTokenResponse],
-// [auth.ErrTokenUnavailable], and *[auth.OAuthError]. Exchange never puts the
-// subject token, the new token, or the agent ID in an error, a span, a log, or a
-// metric.
+// [auth.ErrTokenUnavailable] (see [auth.RetryAfter]), and *[auth.OAuthError].
+// Exchange never puts the subject token, the new token, or the agent ID in an
+// error, a span, a log, or a metric.
 func (s *Source) Exchange(ctx context.Context, req auth.ExchangeRequest) (string, error) {
 	if req.SubjectToken == "" {
 		return "", auth.ErrInvalidToken
@@ -70,11 +73,23 @@ func (s *Source) Exchange(ctx context.Context, req auth.ExchangeRequest) (string
 	if tok, ok := s.exchangeCached(key); ok {
 		return tok, nil
 	}
+	if werr := s.waiting(); werr != nil {
+		if old, ok := s.exchangeUnexpired(key); ok {
+			return old, nil
+		}
+		return "", werr
+	}
 	// The shared request does not stop when one caller stops. The HTTP client
 	// timeout limits it.
 	ch := s.exchangeFlight.DoChan(key, func() (any, error) {
 		if tok, ok := s.exchangeCached(key); ok {
 			return tok, nil
+		}
+		if werr := s.waiting(); werr != nil {
+			if old, ok := s.exchangeUnexpired(key); ok {
+				return old, nil
+			}
+			return "", werr
 		}
 		tok, err := s.fetchExchange(context.WithoutCancel(ctx), key, req, scopes)
 		if err != nil {
@@ -168,6 +183,11 @@ func (s *Source) requestExchange(ctx context.Context, key string, req auth.Excha
 		return "", outcomeNetworkError, fmt.Errorf("%w: %w", auth.ErrTokenUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	// The status and Retry-After come before the body checks. A 429 with a large
+	// body must still start the wait time.
+	if rerr := s.rateLimited(resp); rerr != nil {
+		return "", outcomeUnavailable, rerr
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return "", outcomeNetworkError, fmt.Errorf("%w: cannot read the response", auth.ErrTokenUnavailable)

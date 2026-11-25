@@ -838,7 +838,9 @@ type NotFound = Problem
 
 // OAuthError Error body of an OAuth operation (RFC 6749 section 5.2).
 // The status is 400, except for these codes. `invalid_client` is 401.
-// `server_error` is 500. `temporarily_unavailable` is 503.
+// `server_error` is 500. `temporarily_unavailable` is 503 when the service cannot do the request now.
+// `temporarily_unavailable` is 429 for a rate limit (model `OAuthTooManyRequests`).
+// The client can try again after `Retry-After` of a 429 response. A 503 response of this model has no `Retry-After`.
 type OAuthError struct {
 	// Error The error code.
 	Error OAuthErrorCode `json:"error"`
@@ -857,6 +859,29 @@ type OAuthErrorCode0 string
 
 // OAuthErrorCode1 defines model for OAuthErrorCode.1.
 type OAuthErrorCode1 = string
+
+// OAuthServiceUnavailable An OAuth operation cannot do the request now, for example because the rate limiter is not available.
+// The `error` is `temporarily_unavailable`. The body has the same fields as `OAuthError`.
+type OAuthServiceUnavailable struct {
+	// Error The error code. It is `temporarily_unavailable`.
+	Error OAuthErrorCode `json:"error"`
+
+	// ErrorDescription Text for a developer. It has no internal data and no secret.
+	ErrorDescription *string `json:"error_description,omitempty"`
+}
+
+// OAuthTooManyRequests An OAuth operation limits the rate of requests (RFC 6749 section 5.2).
+// The `error` is `temporarily_unavailable`. The client tries again after `Retry-After`.
+// The body has the same fields as `OAuthError`.
+// The status, the body, and `Retry-After` do not change when a `client_id` or a user exists or does not exist.
+// The response does not give the limit key, the limit value, or the remaining requests.
+type OAuthTooManyRequests struct {
+	// Error The error code. It is `temporarily_unavailable`.
+	Error OAuthErrorCode `json:"error"`
+
+	// ErrorDescription Text for a developer. It has no internal data and no secret.
+	ErrorDescription *string `json:"error_description,omitempty"`
+}
 
 // PermissionDefinition One permission that a service defines.
 type PermissionDefinition struct {
@@ -1035,6 +1060,9 @@ type RoleRef = string
 // It holds permission keys only. It never holds an OIDC scope.
 type ScopeString = string
 
+// ServiceUnavailable The service is not available.
+type ServiceUnavailable = Problem
+
 // Session A sign-in session of a user.
 type Session struct {
 	// CreatedAt Time when the session started.
@@ -1164,6 +1192,9 @@ type TokenTypeHint0 string
 
 // TokenTypeHint1 defines model for TokenTypeHint.1.
 type TokenTypeHint1 = string
+
+// TooManyRequests The client sent too many requests.
+type TooManyRequests = Problem
 
 // Unauthorized The request has no valid credentials.
 type Unauthorized = Problem
@@ -2289,11 +2320,13 @@ type ClientInterface interface {
 	// DiscoveryJwks performs a GET /.well-known/jwks.json (the `DiscoveryJwks` operationId) request.
 	//
 	// Get the public keys that verify the tokens of the service.
+	// Error code of `TooManyRequests`: `rate_limited`.
 	DiscoveryJwks(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// DiscoveryOpenidConfiguration performs a GET /.well-known/openid-configuration (the `DiscoveryOpenidConfiguration` operationId) request.
 	//
 	// Get the OIDC discovery document.
+	// Error code of `TooManyRequests`: `rate_limited`.
 	DiscoveryOpenidConfiguration(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// OAuthAuthorize performs a GET /oauth/authorize (the `OAuthAuthorize` operationId) request.
@@ -2598,6 +2631,7 @@ type ClientInterface interface {
 	// It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
 	// `token_limit` means that the user has the maximum number of active tokens,
 	// or the maximum number of token records that the service keeps. The service sets both limits.
+	// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 	MeApiTokensCreateWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// MeApiTokensCreate performs a POST /v1/me/api-tokens (the `MeApiTokensCreate` operationId) request.
@@ -2610,6 +2644,7 @@ type ClientInterface interface {
 	// It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
 	// `token_limit` means that the user has the maximum number of active tokens,
 	// or the maximum number of token records that the service keeps. The service sets both limits.
+	// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 	MeApiTokensCreate(ctx context.Context, body MeApiTokensCreateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// MeApiTokensRevoke performs a DELETE /v1/me/api-tokens/{tokenId} (the `MeApiTokensRevoke` operationId) request.
@@ -2635,6 +2670,7 @@ type ClientInterface interface {
 	// The caller must be a service client of that app. The app `identity` is not allowed.
 	// Error codes of `UnprocessableContent`: `manifest_app_mismatch`, `permission_app_mismatch`,
 	// `role_permission_unknown`, and `duplicate_key`.
+	// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 	PermissionManifestsPublishWithBody(ctx context.Context, app AppKey, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// PermissionManifestsPublish performs a PUT /v1/permission-manifests/{app} (the `PermissionManifestsPublish` operationId) request.
@@ -2644,6 +2680,7 @@ type ClientInterface interface {
 	// The caller must be a service client of that app. The app `identity` is not allowed.
 	// Error codes of `UnprocessableContent`: `manifest_app_mismatch`, `permission_app_mismatch`,
 	// `role_permission_unknown`, and `duplicate_key`.
+	// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 	PermissionManifestsPublish(ctx context.Context, app AppKey, body PermissionManifestsPublishJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// RolesList performs a GET /v1/roles (the `RolesList` operationId) request.
@@ -2741,6 +2778,7 @@ type ClientInterface interface {
 // DiscoveryJwks performs a GET /.well-known/jwks.json (the `DiscoveryJwks` operationId) request.
 //
 // Get the public keys that verify the tokens of the service.
+// Error code of `TooManyRequests`: `rate_limited`.
 func (c *APIClient) DiscoveryJwks(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewDiscoveryJwksRequest(c.Server)
 	if err != nil {
@@ -2756,6 +2794,7 @@ func (c *APIClient) DiscoveryJwks(ctx context.Context, reqEditors ...RequestEdit
 // DiscoveryOpenidConfiguration performs a GET /.well-known/openid-configuration (the `DiscoveryOpenidConfiguration` operationId) request.
 //
 // Get the OIDC discovery document.
+// Error code of `TooManyRequests`: `rate_limited`.
 func (c *APIClient) DiscoveryOpenidConfiguration(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewDiscoveryOpenidConfigurationRequest(c.Server)
 	if err != nil {
@@ -3400,6 +3439,7 @@ func (c *APIClient) MeApiTokensList(ctx context.Context, params *MeApiTokensList
 // It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
 // `token_limit` means that the user has the maximum number of active tokens,
 // or the maximum number of token records that the service keeps. The service sets both limits.
+// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 func (c *APIClient) MeApiTokensCreateWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewMeApiTokensCreateRequestWithBody(c.Server, contentType, body)
 	if err != nil {
@@ -3422,6 +3462,7 @@ func (c *APIClient) MeApiTokensCreateWithBody(ctx context.Context, contentType s
 // It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
 // `token_limit` means that the user has the maximum number of active tokens,
 // or the maximum number of token records that the service keeps. The service sets both limits.
+// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 func (c *APIClient) MeApiTokensCreate(ctx context.Context, body MeApiTokensCreateJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewMeApiTokensCreateRequest(c.Server, body)
 	if err != nil {
@@ -3487,6 +3528,7 @@ func (c *APIClient) PermissionManifestsGet(ctx context.Context, app AppKey, reqE
 // The caller must be a service client of that app. The app `identity` is not allowed.
 // Error codes of `UnprocessableContent`: `manifest_app_mismatch`, `permission_app_mismatch`,
 // `role_permission_unknown`, and `duplicate_key`.
+// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 func (c *APIClient) PermissionManifestsPublishWithBody(ctx context.Context, app AppKey, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPermissionManifestsPublishRequestWithBody(c.Server, app, contentType, body)
 	if err != nil {
@@ -3506,6 +3548,7 @@ func (c *APIClient) PermissionManifestsPublishWithBody(ctx context.Context, app 
 // The caller must be a service client of that app. The app `identity` is not allowed.
 // Error codes of `UnprocessableContent`: `manifest_app_mismatch`, `permission_app_mismatch`,
 // `role_permission_unknown`, and `duplicate_key`.
+// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 func (c *APIClient) PermissionManifestsPublish(ctx context.Context, app AppKey, body PermissionManifestsPublishJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPermissionManifestsPublishRequest(c.Server, app, body)
 	if err != nil {
@@ -6047,6 +6090,7 @@ type ClientWithResponsesInterface interface {
 	// DiscoveryJwksWithResponse performs a GET /.well-known/jwks.json (the `DiscoveryJwks` operationId) request.
 	//
 	// Get the public keys that verify the tokens of the service.
+	// Error code of `TooManyRequests`: `rate_limited`.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	DiscoveryJwksWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*DiscoveryJwksResponse, error)
@@ -6054,6 +6098,7 @@ type ClientWithResponsesInterface interface {
 	// DiscoveryOpenidConfigurationWithResponse performs a GET /.well-known/openid-configuration (the `DiscoveryOpenidConfiguration` operationId) request.
 	//
 	// Get the OIDC discovery document.
+	// Error code of `TooManyRequests`: `rate_limited`.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	DiscoveryOpenidConfigurationWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*DiscoveryOpenidConfigurationResponse, error)
@@ -6410,6 +6455,7 @@ type ClientWithResponsesInterface interface {
 	// It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
 	// `token_limit` means that the user has the maximum number of active tokens,
 	// or the maximum number of token records that the service keeps. The service sets both limits.
+	// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	MeApiTokensCreateWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*MeApiTokensCreateResponse, error)
@@ -6424,6 +6470,7 @@ type ClientWithResponsesInterface interface {
 	// It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
 	// `token_limit` means that the user has the maximum number of active tokens,
 	// or the maximum number of token records that the service keeps. The service sets both limits.
+	// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 	MeApiTokensCreateWithResponse(ctx context.Context, body MeApiTokensCreateJSONRequestBody, reqEditors ...RequestEditorFn) (*MeApiTokensCreateResponse, error)
 
 	// MeApiTokensRevokeWithResponse performs a DELETE /v1/me/api-tokens/{tokenId} (the `MeApiTokensRevoke` operationId) request.
@@ -6455,6 +6502,7 @@ type ClientWithResponsesInterface interface {
 	// The caller must be a service client of that app. The app `identity` is not allowed.
 	// Error codes of `UnprocessableContent`: `manifest_app_mismatch`, `permission_app_mismatch`,
 	// `role_permission_unknown`, and `duplicate_key`.
+	// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	PermissionManifestsPublishWithBodyWithResponse(ctx context.Context, app AppKey, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PermissionManifestsPublishResponse, error)
@@ -6466,6 +6514,7 @@ type ClientWithResponsesInterface interface {
 	// The caller must be a service client of that app. The app `identity` is not allowed.
 	// Error codes of `UnprocessableContent`: `manifest_app_mismatch`, `permission_app_mismatch`,
 	// `role_permission_unknown`, and `duplicate_key`.
+	// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 	PermissionManifestsPublishWithResponse(ctx context.Context, app AppKey, body PermissionManifestsPublishJSONRequestBody, reqEditors ...RequestEditorFn) (*PermissionManifestsPublishResponse, error)
 
 	// RolesListWithResponse performs a GET /v1/roles (the `RolesList` operationId) request.
@@ -6588,16 +6637,30 @@ type ClientWithResponsesInterface interface {
 	SessionsListWithResponse(ctx context.Context, userId string, params *SessionsListParams, reqEditors ...RequestEditorFn) (*SessionsListResponse, error)
 }
 
+// DiscoveryJwksResponse429Headers the declared response headers of an HTTP 429 response for DiscoveryJwks
+type DiscoveryJwksResponse429Headers struct {
+	RetryAfter int32
+}
+
 type DiscoveryJwksResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
 	JSON200 *JsonWebKeySet
+	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
+	ApplicationproblemJSON429 *TooManyRequests
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *DiscoveryJwksResponse429Headers
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
 func (r DiscoveryJwksResponse) GetJSON200() *JsonWebKeySet {
 	return r.JSON200
+}
+
+// GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
+func (r DiscoveryJwksResponse) GetApplicationproblemJSON429() *TooManyRequests {
+	return r.ApplicationproblemJSON429
 }
 
 // GetBody returns the raw response body bytes
@@ -6629,16 +6692,30 @@ func (r DiscoveryJwksResponse) ContentType() string {
 	return ""
 }
 
+// DiscoveryOpenidConfigurationResponse429Headers the declared response headers of an HTTP 429 response for DiscoveryOpenidConfiguration
+type DiscoveryOpenidConfigurationResponse429Headers struct {
+	RetryAfter int32
+}
+
 type DiscoveryOpenidConfigurationResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
 	JSON200 *DiscoveryDocument
+	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
+	ApplicationproblemJSON429 *TooManyRequests
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *DiscoveryOpenidConfigurationResponse429Headers
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
 func (r DiscoveryOpenidConfigurationResponse) GetJSON200() *DiscoveryDocument {
 	return r.JSON200
+}
+
+// GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
+func (r DiscoveryOpenidConfigurationResponse) GetApplicationproblemJSON429() *TooManyRequests {
+	return r.ApplicationproblemJSON429
 }
 
 // GetBody returns the raw response body bytes
@@ -6675,11 +6752,25 @@ type OAuthAuthorizeResponse302Headers struct {
 	Location string
 }
 
+// OAuthAuthorizeResponse429Headers the declared response headers of an HTTP 429 response for OAuthAuthorize
+type OAuthAuthorizeResponse429Headers struct {
+	RetryAfter int32
+}
+
+// OAuthAuthorizeResponse503Headers the declared response headers of an HTTP 503 response for OAuthAuthorize
+type OAuthAuthorizeResponse503Headers struct {
+	RetryAfter *int32
+}
+
 type OAuthAuthorizeResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	// Headers302 the parsed response headers for an HTTP 302 response
 	Headers302 *OAuthAuthorizeResponse302Headers
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *OAuthAuthorizeResponse429Headers
+	// Headers503 the parsed response headers for an HTTP 503 response
+	Headers503 *OAuthAuthorizeResponse503Headers
 }
 
 // GetBody returns the raw response body bytes
@@ -6716,11 +6807,25 @@ type OAuthEndSessionResponse302Headers struct {
 	Location string
 }
 
+// OAuthEndSessionResponse429Headers the declared response headers of an HTTP 429 response for OAuthEndSession
+type OAuthEndSessionResponse429Headers struct {
+	RetryAfter int32
+}
+
+// OAuthEndSessionResponse503Headers the declared response headers of an HTTP 503 response for OAuthEndSession
+type OAuthEndSessionResponse503Headers struct {
+	RetryAfter *int32
+}
+
 type OAuthEndSessionResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	// Headers302 the parsed response headers for an HTTP 302 response
 	Headers302 *OAuthEndSessionResponse302Headers
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *OAuthEndSessionResponse429Headers
+	// Headers503 the parsed response headers for an HTTP 503 response
+	Headers503 *OAuthEndSessionResponse503Headers
 }
 
 // GetBody returns the raw response body bytes
@@ -6758,6 +6863,13 @@ type OAuthIntrospectResponse200Headers struct {
 	Pragma       string
 }
 
+// OAuthIntrospectResponse429Headers the declared response headers of an HTTP 429 response for OAuthIntrospect
+type OAuthIntrospectResponse429Headers struct {
+	CacheControl string
+	Pragma       string
+	RetryAfter   int32
+}
+
 type OAuthIntrospectResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -6767,12 +6879,16 @@ type OAuthIntrospectResponse struct {
 	JSON400 *OAuthError
 	// JSON401 the response for an HTTP 401 `application/json` response
 	JSON401 *OAuthError
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *OAuthTooManyRequests
 	// JSON500 the response for an HTTP 500 `application/json` response
 	JSON500 *OAuthError
 	// JSON503 the response for an HTTP 503 `application/json` response
 	JSON503 *OAuthError
 	// Headers200 the parsed response headers for an HTTP 200 response
 	Headers200 *OAuthIntrospectResponse200Headers
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *OAuthIntrospectResponse429Headers
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
@@ -6788,6 +6904,11 @@ func (r OAuthIntrospectResponse) GetJSON400() *OAuthError {
 // GetJSON401 returns the response for an HTTP 401 `application/json` response
 func (r OAuthIntrospectResponse) GetJSON401() *OAuthError {
 	return r.JSON401
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r OAuthIntrospectResponse) GetJSON429() *OAuthTooManyRequests {
+	return r.JSON429
 }
 
 // GetJSON500 returns the response for an HTTP 500 `application/json` response
@@ -6829,6 +6950,13 @@ func (r OAuthIntrospectResponse) ContentType() string {
 	return ""
 }
 
+// OAuthRevokeResponse429Headers the declared response headers of an HTTP 429 response for OAuthRevoke
+type OAuthRevokeResponse429Headers struct {
+	CacheControl string
+	Pragma       string
+	RetryAfter   int32
+}
+
 type OAuthRevokeResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -6836,10 +6964,14 @@ type OAuthRevokeResponse struct {
 	JSON400 *OAuthError
 	// JSON401 the response for an HTTP 401 `application/json` response
 	JSON401 *OAuthError
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *OAuthTooManyRequests
 	// JSON500 the response for an HTTP 500 `application/json` response
 	JSON500 *OAuthError
 	// JSON503 the response for an HTTP 503 `application/json` response
 	JSON503 *OAuthError
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *OAuthRevokeResponse429Headers
 }
 
 // GetJSON400 returns the response for an HTTP 400 `application/json` response
@@ -6850,6 +6982,11 @@ func (r OAuthRevokeResponse) GetJSON400() *OAuthError {
 // GetJSON401 returns the response for an HTTP 401 `application/json` response
 func (r OAuthRevokeResponse) GetJSON401() *OAuthError {
 	return r.JSON401
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r OAuthRevokeResponse) GetJSON429() *OAuthTooManyRequests {
+	return r.JSON429
 }
 
 // GetJSON500 returns the response for an HTTP 500 `application/json` response
@@ -6897,6 +7034,13 @@ type OAuthTokenResponse200Headers struct {
 	Pragma       string
 }
 
+// OAuthTokenResponse429Headers the declared response headers of an HTTP 429 response for OAuthToken
+type OAuthTokenResponse429Headers struct {
+	CacheControl string
+	Pragma       string
+	RetryAfter   int32
+}
+
 type OAuthTokenResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -6906,12 +7050,16 @@ type OAuthTokenResponse struct {
 	JSON400 *OAuthError
 	// JSON401 the response for an HTTP 401 `application/json` response
 	JSON401 *OAuthError
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *OAuthTooManyRequests
 	// JSON500 the response for an HTTP 500 `application/json` response
 	JSON500 *OAuthError
 	// JSON503 the response for an HTTP 503 `application/json` response
 	JSON503 *OAuthError
 	// Headers200 the parsed response headers for an HTTP 200 response
 	Headers200 *OAuthTokenResponse200Headers
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *OAuthTokenResponse429Headers
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
@@ -6927,6 +7075,11 @@ func (r OAuthTokenResponse) GetJSON400() *OAuthError {
 // GetJSON401 returns the response for an HTTP 401 `application/json` response
 func (r OAuthTokenResponse) GetJSON401() *OAuthError {
 	return r.JSON401
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r OAuthTokenResponse) GetJSON429() *OAuthTooManyRequests {
+	return r.JSON429
 }
 
 // GetJSON500 returns the response for an HTTP 500 `application/json` response
@@ -6984,22 +7137,54 @@ type OAuthUserinfoResponse403Headers struct {
 	WWWAuthenticate string
 }
 
+// OAuthUserinfoResponse429Headers the declared response headers of an HTTP 429 response for OAuthUserinfo
+type OAuthUserinfoResponse429Headers struct {
+	CacheControl string
+	Pragma       string
+	RetryAfter   int32
+}
+
+// OAuthUserinfoResponse503Headers the declared response headers of an HTTP 503 response for OAuthUserinfo
+type OAuthUserinfoResponse503Headers struct {
+	CacheControl string
+	Pragma       string
+	RetryAfter   *int32
+}
+
 type OAuthUserinfoResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
 	JSON200 *UserInfo
+	// JSON429 the response for an HTTP 429 `application/json` response
+	JSON429 *OAuthTooManyRequests
+	// JSON503 the response for an HTTP 503 `application/json` response
+	JSON503 *OAuthServiceUnavailable
 	// Headers200 the parsed response headers for an HTTP 200 response
 	Headers200 *OAuthUserinfoResponse200Headers
 	// Headers401 the parsed response headers for an HTTP 401 response
 	Headers401 *OAuthUserinfoResponse401Headers
 	// Headers403 the parsed response headers for an HTTP 403 response
 	Headers403 *OAuthUserinfoResponse403Headers
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *OAuthUserinfoResponse429Headers
+	// Headers503 the parsed response headers for an HTTP 503 response
+	Headers503 *OAuthUserinfoResponse503Headers
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
 func (r OAuthUserinfoResponse) GetJSON200() *UserInfo {
 	return r.JSON200
+}
+
+// GetJSON429 returns the response for an HTTP 429 `application/json` response
+func (r OAuthUserinfoResponse) GetJSON429() *OAuthTooManyRequests {
+	return r.JSON429
+}
+
+// GetJSON503 returns the response for an HTTP 503 `application/json` response
+func (r OAuthUserinfoResponse) GetJSON503() *OAuthServiceUnavailable {
+	return r.JSON503
 }
 
 // GetBody returns the raw response body bytes
@@ -8516,6 +8701,11 @@ type MeApiTokensCreateResponse201Headers struct {
 	Pragma       string
 }
 
+// MeApiTokensCreateResponse429Headers the declared response headers of an HTTP 429 response for MeApiTokensCreate
+type MeApiTokensCreateResponse429Headers struct {
+	RetryAfter int32
+}
+
 type MeApiTokensCreateResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -8529,10 +8719,16 @@ type MeApiTokensCreateResponse struct {
 	ApplicationproblemJSON403 *Forbidden
 	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
 	ApplicationproblemJSON422 *UnprocessableContent
+	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
+	ApplicationproblemJSON429 *TooManyRequests
 	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
 	ApplicationproblemJSON500 *InternalServerError
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *ServiceUnavailable
 	// Headers201 the parsed response headers for an HTTP 201 response
 	Headers201 *MeApiTokensCreateResponse201Headers
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *MeApiTokensCreateResponse429Headers
 }
 
 // GetJSON201 returns the response for an HTTP 201 `application/json` response
@@ -8560,9 +8756,19 @@ func (r MeApiTokensCreateResponse) GetApplicationproblemJSON422() *Unprocessable
 	return r.ApplicationproblemJSON422
 }
 
+// GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
+func (r MeApiTokensCreateResponse) GetApplicationproblemJSON429() *TooManyRequests {
+	return r.ApplicationproblemJSON429
+}
+
 // GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
 func (r MeApiTokensCreateResponse) GetApplicationproblemJSON500() *InternalServerError {
 	return r.ApplicationproblemJSON500
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r MeApiTokensCreateResponse) GetApplicationproblemJSON503() *ServiceUnavailable {
+	return r.ApplicationproblemJSON503
 }
 
 // GetBody returns the raw response body bytes
@@ -8808,6 +9014,11 @@ func (r PermissionManifestsGetResponse) ContentType() string {
 	return ""
 }
 
+// PermissionManifestsPublishResponse429Headers the declared response headers of an HTTP 429 response for PermissionManifestsPublish
+type PermissionManifestsPublishResponse429Headers struct {
+	RetryAfter int32
+}
+
 type PermissionManifestsPublishResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -8821,8 +9032,14 @@ type PermissionManifestsPublishResponse struct {
 	ApplicationproblemJSON403 *Forbidden
 	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
 	ApplicationproblemJSON422 *UnprocessableContent
+	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
+	ApplicationproblemJSON429 *TooManyRequests
 	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
 	ApplicationproblemJSON500 *InternalServerError
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *ServiceUnavailable
+	// Headers429 the parsed response headers for an HTTP 429 response
+	Headers429 *PermissionManifestsPublishResponse429Headers
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
@@ -8850,9 +9067,19 @@ func (r PermissionManifestsPublishResponse) GetApplicationproblemJSON422() *Unpr
 	return r.ApplicationproblemJSON422
 }
 
+// GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
+func (r PermissionManifestsPublishResponse) GetApplicationproblemJSON429() *TooManyRequests {
+	return r.ApplicationproblemJSON429
+}
+
 // GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
 func (r PermissionManifestsPublishResponse) GetApplicationproblemJSON500() *InternalServerError {
 	return r.ApplicationproblemJSON500
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r PermissionManifestsPublishResponse) GetApplicationproblemJSON503() *ServiceUnavailable {
+	return r.ApplicationproblemJSON503
 }
 
 // GetBody returns the raw response body bytes
@@ -9967,6 +10194,7 @@ func (r SessionsListResponse) ContentType() string {
 // DiscoveryJwksWithResponse performs a GET /.well-known/jwks.json (the `DiscoveryJwks` operationId) request.
 //
 // Get the public keys that verify the tokens of the service.
+// Error code of `TooManyRequests`: `rate_limited`.
 //
 // Returns a wrapper object for the known response body format(s).
 func (c *ClientWithResponses) DiscoveryJwksWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*DiscoveryJwksResponse, error) {
@@ -9980,6 +10208,7 @@ func (c *ClientWithResponses) DiscoveryJwksWithResponse(ctx context.Context, req
 // DiscoveryOpenidConfigurationWithResponse performs a GET /.well-known/openid-configuration (the `DiscoveryOpenidConfiguration` operationId) request.
 //
 // Get the OIDC discovery document.
+// Error code of `TooManyRequests`: `rate_limited`.
 //
 // Returns a wrapper object for the known response body format(s).
 func (c *ClientWithResponses) DiscoveryOpenidConfigurationWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*DiscoveryOpenidConfigurationResponse, error) {
@@ -10540,6 +10769,7 @@ func (c *ClientWithResponses) MeApiTokensListWithResponse(ctx context.Context, p
 // It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
 // `token_limit` means that the user has the maximum number of active tokens,
 // or the maximum number of token records that the service keeps. The service sets both limits.
+// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 //
 // Returns a wrapper object for the known response body format(s).
 func (c *ClientWithResponses) MeApiTokensCreateWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*MeApiTokensCreateResponse, error) {
@@ -10560,6 +10790,7 @@ func (c *ClientWithResponses) MeApiTokensCreateWithBodyWithResponse(ctx context.
 // It has one entry in `errors` for each key, with `field` `/scope` and `code` `scope_not_granted`.
 // `token_limit` means that the user has the maximum number of active tokens,
 // or the maximum number of token records that the service keeps. The service sets both limits.
+// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 func (c *ClientWithResponses) MeApiTokensCreateWithResponse(ctx context.Context, body MeApiTokensCreateJSONRequestBody, reqEditors ...RequestEditorFn) (*MeApiTokensCreateResponse, error) {
 	rsp, err := c.MeApiTokensCreate(ctx, body, reqEditors...)
 	if err != nil {
@@ -10615,6 +10846,7 @@ func (c *ClientWithResponses) PermissionManifestsGetWithResponse(ctx context.Con
 // The caller must be a service client of that app. The app `identity` is not allowed.
 // Error codes of `UnprocessableContent`: `manifest_app_mismatch`, `permission_app_mismatch`,
 // `role_permission_unknown`, and `duplicate_key`.
+// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 //
 // Returns a wrapper object for the known response body format(s).
 func (c *ClientWithResponses) PermissionManifestsPublishWithBodyWithResponse(ctx context.Context, app AppKey, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PermissionManifestsPublishResponse, error) {
@@ -10632,6 +10864,7 @@ func (c *ClientWithResponses) PermissionManifestsPublishWithBodyWithResponse(ctx
 // The caller must be a service client of that app. The app `identity` is not allowed.
 // Error codes of `UnprocessableContent`: `manifest_app_mismatch`, `permission_app_mismatch`,
 // `role_permission_unknown`, and `duplicate_key`.
+// Error code of `TooManyRequests`: `rate_limited`. Error code of `ServiceUnavailable`: `unavailable`.
 func (c *ClientWithResponses) PermissionManifestsPublishWithResponse(ctx context.Context, app AppKey, body PermissionManifestsPublishJSONRequestBody, reqEditors ...RequestEditorFn) (*PermissionManifestsPublishResponse, error) {
 	rsp, err := c.PermissionManifestsPublish(ctx, app, body, reqEditors...)
 	if err != nil {
@@ -10876,6 +11109,26 @@ func ParseDiscoveryJwksResponse(rsp *http.Response) (*DiscoveryJwksResponse, err
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest TooManyRequests
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON429 = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers DiscoveryJwksResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int32
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
 	}
 
 	return response, nil
@@ -10902,6 +11155,26 @@ func ParseDiscoveryOpenidConfigurationResponse(rsp *http.Response) (*DiscoveryOp
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest TooManyRequests
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON429 = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers DiscoveryOpenidConfigurationResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int32
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
 	}
 
 	return response, nil
@@ -10931,6 +11204,26 @@ func ParseOAuthAuthorizeResponse(rsp *http.Response) (*OAuthAuthorizeResponse, e
 			headers.Location = value
 		}
 		response.Headers302 = &headers
+	case rsp.StatusCode == 429:
+		var headers OAuthAuthorizeResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int32
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	case rsp.StatusCode == 503:
+		var headers OAuthAuthorizeResponse503Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int32
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = &value
+		}
+		response.Headers503 = &headers
 	}
 
 	return response, nil
@@ -10960,6 +11253,26 @@ func ParseOAuthEndSessionResponse(rsp *http.Response) (*OAuthEndSessionResponse,
 			headers.Location = value
 		}
 		response.Headers302 = &headers
+	case rsp.StatusCode == 429:
+		var headers OAuthEndSessionResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int32
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	case rsp.StatusCode == 503:
+		var headers OAuthEndSessionResponse503Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int32
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = &value
+		}
+		response.Headers503 = &headers
 	}
 
 	return response, nil
@@ -11000,6 +11313,13 @@ func ParseOAuthIntrospectResponse(rsp *http.Response) (*OAuthIntrospectResponse,
 		}
 		response.JSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest OAuthTooManyRequests
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest OAuthError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -11034,6 +11354,30 @@ func ParseOAuthIntrospectResponse(rsp *http.Response) (*OAuthIntrospectResponse,
 			headers.Pragma = value
 		}
 		response.Headers200 = &headers
+	case rsp.StatusCode == 429:
+		var headers OAuthIntrospectResponse429Headers
+		if values := rsp.Header.Values("Cache-Control"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Cache-Control", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.CacheControl = value
+		}
+		if values := rsp.Header.Values("Pragma"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Pragma", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.Pragma = value
+		}
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int32
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
 	}
 
 	return response, nil
@@ -11070,6 +11414,13 @@ func ParseOAuthRevokeResponse(rsp *http.Response) (*OAuthRevokeResponse, error) 
 		}
 		response.JSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest OAuthTooManyRequests
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest OAuthError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -11084,6 +11435,33 @@ func ParseOAuthRevokeResponse(rsp *http.Response) (*OAuthRevokeResponse, error) 
 		}
 		response.JSON503 = &dest
 
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers OAuthRevokeResponse429Headers
+		if values := rsp.Header.Values("Cache-Control"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Cache-Control", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.CacheControl = value
+		}
+		if values := rsp.Header.Values("Pragma"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Pragma", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.Pragma = value
+		}
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int32
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
 	}
 
 	return response, nil
@@ -11124,6 +11502,13 @@ func ParseOAuthTokenResponse(rsp *http.Response) (*OAuthTokenResponse, error) {
 		}
 		response.JSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest OAuthTooManyRequests
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest OAuthError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -11158,6 +11543,30 @@ func ParseOAuthTokenResponse(rsp *http.Response) (*OAuthTokenResponse, error) {
 			headers.Pragma = value
 		}
 		response.Headers200 = &headers
+	case rsp.StatusCode == 429:
+		var headers OAuthTokenResponse429Headers
+		if values := rsp.Header.Values("Cache-Control"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Cache-Control", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.CacheControl = value
+		}
+		if values := rsp.Header.Values("Pragma"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Pragma", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.Pragma = value
+		}
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int32
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
 	}
 
 	return response, nil
@@ -11189,6 +11598,20 @@ func ParseOAuthUserinfoResponse(rsp *http.Response) (*OAuthUserinfoResponse, err
 
 	case rsp.StatusCode == 403:
 		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest OAuthTooManyRequests
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest OAuthServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -11230,6 +11653,54 @@ func ParseOAuthUserinfoResponse(rsp *http.Response) (*OAuthUserinfoResponse, err
 			headers.WWWAuthenticate = value
 		}
 		response.Headers403 = &headers
+	case rsp.StatusCode == 429:
+		var headers OAuthUserinfoResponse429Headers
+		if values := rsp.Header.Values("Cache-Control"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Cache-Control", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.CacheControl = value
+		}
+		if values := rsp.Header.Values("Pragma"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Pragma", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.Pragma = value
+		}
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int32
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
+	case rsp.StatusCode == 503:
+		var headers OAuthUserinfoResponse503Headers
+		if values := rsp.Header.Values("Cache-Control"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Cache-Control", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.CacheControl = value
+		}
+		if values := rsp.Header.Values("Pragma"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Pragma", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.Pragma = value
+		}
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int32
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = &value
+		}
+		response.Headers503 = &headers
 	}
 
 	return response, nil
@@ -12490,12 +12961,26 @@ func ParseMeApiTokensCreateResponse(rsp *http.Response) (*MeApiTokensCreateRespo
 		}
 		response.ApplicationproblemJSON422 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest TooManyRequests
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON429 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalServerError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
 
 	}
 
@@ -12517,6 +13002,16 @@ func ParseMeApiTokensCreateResponse(rsp *http.Response) (*MeApiTokensCreateRespo
 			headers.Pragma = value
 		}
 		response.Headers201 = &headers
+	case rsp.StatusCode == 429:
+		var headers MeApiTokensCreateResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int32
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
 	}
 
 	return response, nil
@@ -12743,6 +13238,13 @@ func ParsePermissionManifestsPublishResponse(rsp *http.Response) (*PermissionMan
 		}
 		response.ApplicationproblemJSON422 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest TooManyRequests
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON429 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalServerError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -12750,6 +13252,26 @@ func ParsePermissionManifestsPublishResponse(rsp *http.Response) (*PermissionMan
 		}
 		response.ApplicationproblemJSON500 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ServiceUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 429:
+		var headers PermissionManifestsPublishResponse429Headers
+		if values := rsp.Header.Values("Retry-After"); len(values) > 0 {
+			var value int32
+			if err := runtime.BindStyledParameterWithOptions("simple", "Retry-After", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			}
+			headers.RetryAfter = value
+		}
+		response.Headers429 = &headers
 	}
 
 	return response, nil

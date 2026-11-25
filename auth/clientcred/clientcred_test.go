@@ -1,6 +1,7 @@
 package clientcred_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -11,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -119,6 +121,24 @@ type fixture struct {
 	spans   *tracetest.SpanRecorder
 	clock   *fakeClock
 	privPEM string
+	logs    *logBuffer
+}
+
+type logBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *logBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *logBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
 }
 
 type fakeClock struct {
@@ -161,8 +181,10 @@ func newFixture(t *testing.T, s setup) *fixture {
 	spans := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spans))
 	clock := &fakeClock{t: time.Unix(1_800_000_000, 0)}
+	logs := &logBuffer{}
 	opts := []clientcred.Option{
 		clientcred.WithClock(clock.now), clientcred.WithMeterProvider(mp), clientcred.WithTracerProvider(tp),
+		clientcred.WithLogger(slog.New(slog.NewTextHandler(logs, nil))),
 	}
 	if s.client != nil {
 		opts = append(opts, clientcred.WithHTTPClient(s.client))
@@ -171,7 +193,7 @@ func newFixture(t *testing.T, s setup) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &fixture{src: src, ep: ep, key: key, reader: reader, spans: spans, clock: clock, privPEM: privPEM}
+	return &fixture{src: src, ep: ep, key: key, reader: reader, spans: spans, clock: clock, privPEM: privPEM, logs: logs}
 }
 
 // outcomes returns the counts of constellation.auth.token.request by outcome.

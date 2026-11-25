@@ -1371,7 +1371,7 @@ Errors. `Verify` wraps one of these errors, so `errors.Is` works. The middleware
 | `ErrWrongIssuer` | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `wrong_issuer` |
 | `ErrWrongAudience` | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `wrong_audience` |
 | `ErrKeysUnavailable` (no keys fetched yet, or the rate limit blocks the refetch for an unknown `kid`) | 503, `Retry-After: 5` | none | `auth_unavailable` | `Authentication unavailable` | `keys_unavailable` |
-| `ErrIntrospectionUnavailable` (identity is down, the client is rejected, the response is not valid, or too many identity calls run) | 503, `Retry-After: 5` | none | `auth_unavailable` | `Authentication unavailable` | `unavailable` |
+| `ErrIntrospectionUnavailable` (identity is down, the client is rejected, the response is not valid, identity returned 429, or too many identity calls run) | 503, `Retry-After` from the error (5 if the error has no wait time) | none | `auth_unavailable` | `Authentication unavailable` | `unavailable` |
 | Other error | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `invalid` |
 | Missing scope (from `RequireScopes`) | 403 | `Bearer error="insufficient_scope", scope="..."` | `insufficient_scope` | `Missing scopes` | Not counted |
 
@@ -1472,6 +1472,7 @@ Environment variables (nest `introspect.Config` with `envPrefix:"AUTH__INTROSPEC
 | `CacheSize` | `AUTH__INTROSPECT__CACHE_SIZE` | `10000` | 100 to 1000000 entries. |
 | `InactiveCacheSize` | `AUTH__INTROSPECT__INACTIVE_CACHE_SIZE` | `1000` | 10 to 100000 entries. Used only if `InactiveTTL` is more than 0. |
 | `MaxConcurrent` | `AUTH__INTROSPECT__MAX_CONCURRENT` | `16` | 1 to 256 identity calls at the same time. |
+| `MaxCallsPerSecond` | `AUTH__INTROSPECT__MAX_CALLS_PER_SECOND` | `20` | 1 to 1000 identity calls each second in one process. |
 | `HTTPTimeout` | `AUTH__INTROSPECT__HTTP_TIMEOUT` | `5s` | `1s` to `30s`. |
 | `AllowInsecureHTTP` | `AUTH__INTROSPECT__ALLOW_INSECURE_HTTP` | `false` | Use it only for local Compose and tests. |
 
@@ -1490,7 +1491,7 @@ verifier := auth.ByFormat(jwtVerifier, apiVerifier)
 p, err := verifier.Verify(ctx, "cpat_...")
 ```
 
-Errors: `auth.ErrInvalidToken` for a token that is not valid, and `auth.ErrIntrospectionUnavailable` when the verifier cannot say if the token is valid. The middleware maps `ErrIntrospectionUnavailable` to 503 with `Retry-After: 5`.
+Errors: `auth.ErrInvalidToken` for a token that is not valid, and `auth.ErrIntrospectionUnavailable` when the verifier cannot say if the token is valid. If identity asks for a wait time, the error is an `*auth.UnavailableError`. `auth.RetryAfter(err)` returns the wait time. The middleware maps `ErrIntrospectionUnavailable` to 503. The `Retry-After` header is the wait time in whole seconds, rounded up, from 1 to 60. If the error has no wait time, the header is `5`.
 
 Rules and limits:
 
@@ -1498,8 +1499,10 @@ Rules and limits:
 - The cache key is the SHA-256 hash of the token. The cache never holds the raw token. An active result stays in the cache for `min(CacheTTL, exp - now)`. A revoked token works for at most `CacheTTL` (60 s at most). An inactive result goes to a separate cache for `InactiveTTL`, so inactive results cannot remove active entries. Each cache is an LRU with a size limit.
 - Concurrent calls for the same token share one request.
 - `MaxConcurrent` limits the number of identity calls at the same time. A call that needs a new request, and finds no free slot, returns `ErrIntrospectionUnavailable` with the outcome `overloaded` and is not cached. A valid token that is not in the cache gets 503 for a short time. Tokens in the cache continue to work. A caller with no credential can send random tokens in the correct format. Each token makes at most one identity call, and `MaxConcurrent` limits the load.
+- `MaxCallsPerSecond` is a local limit of identity calls each second in one process. The burst is equal to the limit. The verifier examines the positive and the negative cache before the limit. When the limit is full, `Verify` makes no HTTP call and returns `ErrIntrospectionUnavailable` with `auth.RetryAfter` of 1 s and the outcome `overloaded`. The reason is that a caller with no credential can send many random tokens in the correct format, and each new token causes one identity call. Without the limit, these calls can use up the identity budget of the service. The identity limits `introspect_client` and `introspect_ip` count the calls of all instances. Thus `MaxCallsPerSecond` x 60 x the number of service instances must be below `introspect_client` and `introspect_ip` of identity. The default of 20 gives 1200 calls each minute for each instance. It permits 5 instances below a limit of 6000 each minute. If you run more instances, decrease `MaxCallsPerSecond` or increase the identity limits. The limit is one bucket for the whole process. A caller with no credential can send random tokens in the correct format and use all of the bucket. Then a valid token that is not in the cache gets `ErrIntrospectionUnavailable`. Put a per-IP rate limit at the edge (a gateway or an ingress) in front of each route that accepts API tokens.
+- A response with status 429, and a response with status 503 and a valid `Retry-After` header, give `ErrIntrospectionUnavailable` with the wait time (outcome `unavailable`) and one `warn` log record each 60 s. The wait time has a maximum of 60 s, the same as the `Retry-After` header of the middleware. The verifier then makes no identity call until the wait time ends. Without a `Retry-After` value on a 429, the wait time is 5 s and `auth.RetryAfter` returns false. A token in the cache still gets its cached result. Any other token gets the unavailable error. A call that the wait time stops is not counted. This wait time is separate from the wait time of the token source, because identity counts the token calls and the introspection calls in different buckets (per client ID and per IP).
 - The request is a form POST with `token`, `token_type_hint=api_token`, `client_id`, `client_assertion_type`, and `client_assertion`. It does not follow redirects. The body limit is 64 KiB.
-- A network error, a timeout, an HTTP 5xx status, and the error `temporarily_unavailable` give `ErrIntrospectionUnavailable` (outcome `unavailable`). HTTP 400 or 401 with an OAuth error gives `ErrIntrospectionUnavailable` (outcome `client_rejected`) and one `error` log record. This is a configuration problem, for example a bad client key. Any other status, a body that is too large, and bad JSON give `ErrIntrospectionUnavailable` (outcome `invalid_response`) and one `error` log record. None of these results is cached.
+- A network error, a timeout, an HTTP 5xx status with no `Retry-After` value, and the error `temporarily_unavailable` give `ErrIntrospectionUnavailable` (outcome `unavailable`). HTTP 400 or 401 with an OAuth error gives `ErrIntrospectionUnavailable` (outcome `client_rejected`) and one `error` log record. This is a configuration problem, for example a bad client key. Any other status, a body that is too large, and bad JSON give `ErrIntrospectionUnavailable` (outcome `invalid_response`) and one `error` log record. None of these results is cached.
 - `active: false` gives `ErrInvalidToken`. For `active: true`, the adapter checks that `token_type` is `api_token`, `aud` is `Config.Audience`, `exp` is in the future, `sub` is not empty, `principal_type` is `user`, and each scope is a valid permission key with the prefix `<Audience>:`. A failed check gives `ErrInvalidToken` (outcome `invalid_response`) and no cache entry. A wrong `aud` also writes one `warn` log record with the expected and the received `aud`.
 - Each kind of log record is limited to one record each 60 seconds.
 - The principal has `ID` (the user), `Type` `user`, the `Scopes`, `Audience`, and `TokenType` `auth.TokenTypeAPI`.
@@ -1535,7 +1538,7 @@ src, err := clientcred.New(cfg.Client)
 token, err := src.Token(ctx, "identity", "identity:manifest:publish")
 ```
 
-Errors: `auth.ErrNoScopes`, `auth.ErrBadTokenResponse`, `auth.ErrTokenUnavailable`, and `*auth.OAuthError`. `New` returns an error that names the field and the variable if `Issuer` or `TokenURL` (after the default) does not use `https` and `AllowInsecureHTTP` is `false`. A URL that is not an `http` or `https` URL is always an error.
+Errors: `auth.ErrNoScopes`, `auth.ErrBadTokenResponse`, `auth.ErrTokenUnavailable` (see `auth.RetryAfter`), and `*auth.OAuthError`. `New` returns an error that names the field and the variable if `Issuer` or `TokenURL` (after the default) does not use `https` and `AllowInsecureHTTP` is `false`. A URL that is not an `http` or `https` URL is always an error.
 
 Rules and limits:
 
@@ -1545,6 +1548,7 @@ Rules and limits:
 - Concurrent calls for one key share one request.
 - The response body has a limit of 64 KiB. A 200 response with no `access_token`, or with an `expires_in` that is missing, 0, negative, or more than 24 hours, gives `auth.ErrBadTokenResponse`. Nothing goes in the cache.
 - A 5xx response, the OAuth error `temporarily_unavailable`, and a network error give `auth.ErrTokenUnavailable`. `Token` does not retry. The caller decides.
+- Each 429 response gives `auth.ErrTokenUnavailable` as an `*auth.UnavailableError`, for each OAuth code and for a body that is not JSON. A 503 response with a valid `Retry-After` header does the same. `auth.RetryAfter(err)` returns the wait time of the server. The source then keeps one "not before" time for all audiences and for `Exchange`, because identity counts all token calls of one client ID in one bucket. A 429 with no `Retry-After` value gives a "not before" time of 5 s and `auth.RetryAfter` returns false. Until the time ends, `Token` and `Exchange` make no HTTP call. They return the unexpired cached token of their key, or the `*auth.UnavailableError` with the remaining time. A call that the wait time stops is not counted in the metric. The wait time has a maximum of 60 s, the same as the `Retry-After` header of the middleware. The source writes one `warn` log record each 60 s for a wait time. Use `clientcred.WithLogger` to set the logger. The default is `slog.Default()`. A 503 with no valid `Retry-After` starts no wait time.
 - Another OAuth error gives `*auth.OAuthError` with the `error` code.
 - The request does not follow redirects.
 - The code never logs or records the private key, the assertion, or a token.
@@ -1573,7 +1577,7 @@ Rules and limits:
 - The cache holds user access tokens in memory under a hashed key. The entries end with the token.
 - The code never puts the subject token, the new token, or the agent ID in a span, a log, a metric, or an error text.
 - Metric `constellation.auth.token.exchange` (counter, unit `{request}`) has the attribute `outcome` with the values `ok`, `oauth_error`, `unavailable`, `bad_response`, and `network_error`. Span `auth.clientcred.exchange` has the attributes `constellation.auth.client_id`, `constellation.auth.audience`, `constellation.auth.exchange.with_agent` (boolean), and `constellation.auth.outcome`.
-- Only `temporarily_unavailable`, an HTTP 5xx status, and a network error give `auth.ErrTokenUnavailable`. Retry these with backoff. All other OAuth errors give `*auth.OAuthError`. Do not retry the same request.
+- Only `temporarily_unavailable`, an HTTP 429 or 5xx status, and a network error give `auth.ErrTokenUnavailable`. Retry these with backoff, and wait at least `auth.RetryAfter(err)` if it returns true. All other OAuth errors give `*auth.OAuthError`. Do not retry the same request.
 
 Error codes of token exchange (from the contract `OAuth_token`):
 
@@ -1586,7 +1590,7 @@ Error codes of token exchange (from the contract `OAuth_token`):
 | `invalid_grant` | The user token is not valid (expired, not a user access token, has `act`, is an API token, or the user is disabled). Or the agent does not exist, is disabled, or does not belong to the client. The error text is the same for the agent cases. | Get a new user token (the user logs in again), or check the agent registration. Do not retry the same request. | `*auth.OAuthError` |
 | `invalid_target` | `audience` is not one app key, or it is `identity`. | Change the audience. Do not retry. | `*auth.OAuthError` |
 | `invalid_scope` | A requested scope is not in the granted set. The granted set is the user permissions. With an agent, it is also intersected with the agent permissions. | With an agent, the agent lacks the permission. Start the approval flow of `VISION.md` section 6.6 or ask for less scope. Do not retry the same request. | `*auth.OAuthError` |
-| `temporarily_unavailable`, HTTP 5xx, network error | Identity is not available. | Retry with backoff. | `auth.ErrTokenUnavailable` |
+| `temporarily_unavailable`, HTTP 429, HTTP 5xx, network error | Identity is not available or limits the requests. | Retry with backoff. Wait for `auth.RetryAfter(err)`. | `auth.ErrTokenUnavailable` |
 
 ### Client assertion
 
@@ -1620,7 +1624,7 @@ Errors: `New` returns an error for a missing or wrong `URL`, a `URL` with the sc
 | 200 | `nil` |
 | 422 | `*manifest.InvalidError` with the `Problem` codes and fields |
 | 401 or 403 | `manifest.ErrDenied` |
-| 408, 429, 5xx, network error, `auth.ErrTokenUnavailable` from the token source | `manifest.ErrUnavailable` |
+| 408, 429, 5xx, network error, `auth.ErrTokenUnavailable` from the token source | `manifest.ErrUnavailable`. With a `Retry-After` value on a 429 or a 503, or with a wait time from the token source, the error is a `*manifest.UnavailableError`. `manifest.RetryAfter(err)` returns the wait time. |
 | Other 4xx, for example 400, 404, and 409 | `manifest.ErrRejected` |
 | OAuth error `invalid_client`, `invalid_scope`, or `unauthorized_client` from the token source | `manifest.ErrDenied` |
 | Other | `manifest.ErrUnavailable` |
@@ -1675,6 +1679,7 @@ Errors of `Registry.Publish`: `*manifest.InvalidError`, `manifest.ErrDenied`, `m
 Rules and limits:
 
 - The backoff is exponential from 1 second to 1 minute, with jitter. `WithBackoff` changes it.
+- If the registry gives a `*manifest.UnavailableError` with a wait time, the publisher waits for the larger value of its backoff and the wait time, up to 5 minutes.
 - Metric `constellation.manifest.publish` (counter, unit `{attempt}`) has the attribute `outcome`.
 - A service is not ready until identity knows its permissions. It does not stop when identity is down.
 - `manifest.Load` reads a JSON file and checks the rules of the identity service: the app key, the app prefix of each permission key, the role permissions that the manifest defines, and no duplicate key. It rejects unknown fields. Call it in a unit test of the service to find a wrong manifest early.

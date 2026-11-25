@@ -53,6 +53,7 @@ type Publisher struct {
 	maxWait       time.Duration
 	meterProvider metric.MeterProvider
 	attempts      metric.Int64Counter
+	sleep         func(context.Context, time.Duration) error
 	published     atomic.Bool
 	// invalid is the result of the check of the manifest in NewPublisher.
 	invalid error
@@ -71,6 +72,7 @@ func NewPublisher(r Registry, m PermissionManifest, opts ...Option) *Publisher {
 		maxWait:       time.Minute,
 		meterProvider: otel.GetMeterProvider(),
 		invalid:       m.Validate(),
+		sleep:         sleep,
 	}
 	for _, opt := range opts {
 		opt(p)
@@ -133,27 +135,37 @@ func (p *Publisher) Run(ctx context.Context) error {
 				slog.String("app", p.m.App), slog.Any("error", err))
 			return err
 		case errors.Is(err, ErrDenied):
-			d := jitter(wait)
+			d := p.waitTime(err, wait)
 			p.count(ctx, outcomeDenied)
 			p.log.ErrorContext(ctx, "manifest publish denied, will retry",
 				slog.String("app", p.m.App), slog.Any("error", err), slog.Duration("wait", d))
-			if err := sleep(ctx, d); err != nil {
+			if err := p.sleep(ctx, d); err != nil {
 				return err
 			}
 			wait = min(wait*2, p.maxWait)
 			continue
 		default:
-			d := jitter(wait)
+			d := p.waitTime(err, wait)
 			p.count(ctx, outcomeUnavailable)
 			p.log.WarnContext(ctx, "manifest publish failed, will retry",
 				slog.String("app", p.m.App), slog.Any("error", err), slog.Duration("wait", d))
-			if err := sleep(ctx, d); err != nil {
+			if err := p.sleep(ctx, d); err != nil {
 				return err
 			}
 			wait = min(wait*2, p.maxWait)
 			continue
 		}
 	}
+}
+
+// waitTime returns the wait before the next attempt. It is the larger value of
+// the backoff with jitter and the wait time of the server, up to 5 minutes.
+func (p *Publisher) waitTime(err error, backoff time.Duration) time.Duration {
+	d := jitter(backoff)
+	if ra, ok := RetryAfter(err); ok {
+		d = max(d, min(ra, maxRetryAfter))
+	}
+	return d
 }
 
 func (p *Publisher) count(ctx context.Context, outcome string) {
