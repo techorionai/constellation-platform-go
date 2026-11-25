@@ -23,9 +23,11 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/singleflight"
+	"golang.org/x/time/rate"
 
 	"github.com/techorionai/constellation-platform-go/auth"
 	"github.com/techorionai/constellation-platform-go/internal/lru"
+	"github.com/techorionai/constellation-platform-go/internal/retryafter"
 )
 
 const (
@@ -93,6 +95,12 @@ type Config struct {
 	// MaxConcurrent is the maximum number of identity calls at the same time.
 	// The range is 1 to 256.
 	MaxConcurrent int `env:"MAX_CONCURRENT" envDefault:"16"`
+	// MaxCallsPerSecond is the maximum number of identity calls each second in one
+	// process. The range is 1 to 1000. The burst is equal to the limit. The
+	// identity limits count the calls of all instances, so the sum
+	// MaxCallsPerSecond x 60 x the number of instances must be below the limits
+	// introspect_client and introspect_ip of the identity service.
+	MaxCallsPerSecond int `env:"MAX_CALLS_PER_SECOND" envDefault:"20"`
 	// HTTPTimeout is the time limit of one introspection request. The range is
 	// 1s to 30s.
 	HTTPTimeout time.Duration `env:"HTTP_TIMEOUT" envDefault:"5s"`
@@ -153,6 +161,8 @@ func (c Config) resolve() (Config, error) {
 		return c, rangeErr("InactiveCacheSize", "INACTIVE_CACHE_SIZE", "from 10 to 100000")
 	case c.MaxConcurrent < 1 || c.MaxConcurrent > 256:
 		return c, rangeErr("MaxConcurrent", "MAX_CONCURRENT", "from 1 to 256")
+	case c.MaxCallsPerSecond < 1 || c.MaxCallsPerSecond > 1000:
+		return c, rangeErr("MaxCallsPerSecond", "MAX_CALLS_PER_SECOND", "from 1 to 1000")
 	case c.HTTPTimeout < time.Second || c.HTTPTimeout > 30*time.Second:
 		return c, rangeErr("HTTPTimeout", "HTTP_TIMEOUT", "from 1s to 30s")
 	}
@@ -203,7 +213,12 @@ type Verifier struct {
 	active   *lru.Cache[string, activeEntry]
 	inactive *lru.Cache[string, struct{}]
 	slots    chan struct{}
-	flight   singleflight.Group
+	limiter  *rate.Limiter
+
+	// notBefore is the time before which the verifier makes no introspection call.
+	noteMu    sync.Mutex
+	notBefore time.Time
+	flight    singleflight.Group
 
 	logMu   sync.Mutex
 	lastLog map[string]time.Time
@@ -229,6 +244,7 @@ func New(cfg Config, assertion auth.ClientAssertion, opts ...Option) (*Verifier,
 		tracerProvider: otel.GetTracerProvider(),
 		active:         lru.New[string, activeEntry](rc.CacheSize),
 		slots:          make(chan struct{}, rc.MaxConcurrent),
+		limiter:        rate.NewLimiter(rate.Limit(rc.MaxCallsPerSecond), rc.MaxCallsPerSecond),
 		lastLog:        make(map[string]time.Time),
 	}
 	if rc.InactiveTTL > 0 {
@@ -307,6 +323,9 @@ func (v *Verifier) Verify(ctx context.Context, token string) (auth.Principal, er
 			return auth.Principal{}, fmt.Errorf("auth/introspect: token is not active: %w", auth.ErrInvalidToken)
 		}
 	}
+	if werr := v.waiting(); werr != nil {
+		return auth.Principal{}, werr
+	}
 	// The shared request does not stop when one caller stops. The HTTP client
 	// timeout limits it.
 	ch := v.flight.DoChan(key, func() (any, error) {
@@ -320,6 +339,9 @@ func (v *Verifier) Verify(ctx context.Context, token string) (auth.Principal, er
 				return result{err: fmt.Errorf("auth/introspect: token is not active: %w", auth.ErrInvalidToken)}, nil
 			}
 		}
+		if werr := v.waiting(); werr != nil {
+			return result{err: werr}, nil
+		}
 		select {
 		case v.slots <- struct{}{}:
 			defer func() { <-v.slots }()
@@ -327,6 +349,14 @@ func (v *Verifier) Verify(ctx context.Context, token string) (auth.Principal, er
 			v.count(ctx, outcomeOverloaded)
 			v.logLimited("overloaded", slog.LevelWarn, "auth/introspect: too many introspection calls at the same time, the call is refused")
 			return result{err: fmt.Errorf("auth/introspect: overloaded: %w", auth.ErrIntrospectionUnavailable)}, nil
+		}
+		if !v.limiter.AllowN(v.clock(), 1) {
+			v.count(ctx, outcomeOverloaded)
+			v.logLimited("rate_local", slog.LevelWarn, "auth/introspect: too many introspection calls each second, the call is refused")
+			return result{err: &auth.UnavailableError{
+				Err:        fmt.Errorf("auth/introspect: too many calls each second: %w", auth.ErrIntrospectionUnavailable),
+				RetryAfter: time.Second,
+			}}, nil
 		}
 		p, err := v.fetch(context.WithoutCancel(ctx), key, token)
 		return result{principal: p, err: err}, nil
@@ -390,6 +420,38 @@ func (v *Verifier) fetch(ctx context.Context, key, token string) (auth.Principal
 	return p, err
 }
 
+// defaultWait is the wait time of a 429 with no valid Retry-After.
+const defaultWait = 5 * time.Second
+
+// waiting returns an [auth.UnavailableError] with the remaining time if the wait
+// time of the verifier is not over. Otherwise it returns nil.
+func (v *Verifier) waiting() error {
+	v.noteMu.Lock()
+	nb := v.notBefore
+	v.noteMu.Unlock()
+	if rem := nb.Sub(v.clock()); rem > 0 {
+		return &auth.UnavailableError{
+			Err:        fmt.Errorf("auth/introspect: wait time of the identity service: %w", auth.ErrIntrospectionUnavailable),
+			RetryAfter: rem,
+		}
+	}
+	return nil
+}
+
+// startWait sets the "not before" time. A value of 0 means the server gave no value.
+func (v *Verifier) startWait(d time.Duration) {
+	w := d
+	if w <= 0 {
+		w = defaultWait
+	}
+	nb := v.clock().Add(w)
+	v.noteMu.Lock()
+	if nb.After(v.notBefore) {
+		v.notBefore = nb
+	}
+	v.noteMu.Unlock()
+}
+
 func unavailable(msg string) error {
 	return fmt.Errorf("auth/introspect: %s: %w", msg, auth.ErrIntrospectionUnavailable)
 }
@@ -429,6 +491,16 @@ func (v *Verifier) request(ctx context.Context, key, token string) (auth.Princip
 	if len(body) > maxResponseBytes {
 		v.logLimited("invalid_response", slog.LevelError, "auth/introspect: the response is too large")
 		return auth.Principal{}, outcomeInvalidResp, unavailable("the response is too large")
+	}
+	if d, ok := retryafter.FromStatus(resp.StatusCode, resp.Header, v.clock()); ok {
+		v.startWait(d)
+		v.logLimited("rate_limited", slog.LevelWarn,
+			"auth/introspect: the identity service asks for a wait time",
+			slog.Int("status", resp.StatusCode), slog.Duration("retry_after", d))
+		return auth.Principal{}, outcomeUnavailable, &auth.UnavailableError{
+			Err:        unavailable(fmt.Sprintf("status %d", resp.StatusCode)),
+			RetryAfter: d,
+		}
 	}
 	var ir introspectResponse
 	parsed := json.Unmarshal(body, &ir) == nil

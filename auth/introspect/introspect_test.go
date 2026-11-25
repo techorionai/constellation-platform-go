@@ -148,7 +148,7 @@ func newFixture(t *testing.T, s setup) *fixture {
 	cfg := introspect.Config{
 		Issuer: "http://issuer.example", IntrospectURL: f.srv.URL + "/oauth/introspect", Audience: audience,
 		CacheTTL: 30 * time.Second, InactiveTTL: 5 * time.Second, CacheSize: 100, InactiveCacheSize: 10,
-		MaxConcurrent: 16, HTTPTimeout: 5 * time.Second, AllowInsecureHTTP: true,
+		MaxConcurrent: 16, MaxCallsPerSecond: 1000, HTTPTimeout: 5 * time.Second, AllowInsecureHTTP: true,
 	}
 	if s.cfg != nil {
 		s.cfg(&cfg)
@@ -203,7 +203,7 @@ func (f *fixture) outcomes(t *testing.T) map[string]int64 {
 func TestU1Config(t *testing.T) {
 	good := introspect.Config{
 		Issuer: "https://issuer.example", Audience: audience, CacheTTL: 30 * time.Second, InactiveTTL: 5 * time.Second,
-		CacheSize: 10000, InactiveCacheSize: 1000, MaxConcurrent: 16, HTTPTimeout: 5 * time.Second,
+		CacheSize: 10000, InactiveCacheSize: 1000, MaxConcurrent: 16, MaxCallsPerSecond: 1000, HTTPTimeout: 5 * time.Second,
 	}
 	if _, err := introspect.New(good, &mock.ClientAssertion{}); err != nil {
 		t.Fatal(err)
@@ -260,7 +260,7 @@ func TestU1Config(t *testing.T) {
 	}
 	want := introspect.Config{
 		Issuer: "https://issuer.example", Audience: audience, CacheTTL: 30 * time.Second, InactiveTTL: 5 * time.Second,
-		CacheSize: 10000, InactiveCacheSize: 1000, MaxConcurrent: 16, HTTPTimeout: 5 * time.Second,
+		CacheSize: 10000, InactiveCacheSize: 1000, MaxConcurrent: 16, MaxCallsPerSecond: 20, HTTPTimeout: 5 * time.Second,
 	}
 	if cfg.Introspect != want {
 		t.Fatalf("defaults = %+v", cfg.Introspect)
@@ -823,6 +823,10 @@ func TestU31InactiveDoesNotEvictActive(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 1; i <= 5000; i++ {
+		if i%500 == 0 {
+			// The local limit refills with the clock.
+			f.clock.advance(time.Second)
+		}
 		_, _ = f.v.Verify(context.Background(), token(i))
 	}
 	before := f.httpCalls()
