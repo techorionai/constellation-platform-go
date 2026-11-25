@@ -197,6 +197,8 @@ An alert on a high rate of `keys_unavailable` or of `network_error` shows that t
 - The introspection cache of `auth/introspect` is in memory and not in Valkey. Each service has its own Valkey key prefix and ACL user, and cannot read the keys of the identity service. A revoked API token works for a maximum of `CacheTTL` (60 s at most) in each service instance.
 - A cache key that comes from a token is a SHA-256 hash. The cache never holds the raw token as a key. This applies to `auth/introspect` and to the exchange cache of `auth/clientcred`.
 - Use `auth.ByFormat(jwtVerifier, introspectVerifier)` to accept both JWT access tokens and personal API tokens. A service that must refuse API tokens on a route checks `Principal.TokenType`.
+- A client of a platform service treats the status 429 as "unavailable" and waits for the `Retry-After` header before the next call. It does the same for the status 503 with a valid `Retry-After` header. A 503 with no valid header starts no wait time. `auth.RetryAfter` and `manifest.RetryAfter` return the wait time of an error. A call that the wait time stops makes no request and is not counted in the metric, the same as a cache hit.
+- The outcome `overloaded` of `constellation.auth.introspect` also covers the local limit `MaxCallsPerSecond` of `auth/introspect`.
 
 ## Generated code
 
