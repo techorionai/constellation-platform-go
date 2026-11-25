@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/techorionai/constellation-platform-go/auth"
 	"github.com/techorionai/constellation-platform-go/resources/test/mock"
@@ -139,5 +140,30 @@ func TestU18ActAttributes(t *testing.T) {
 	}
 	if attrs["constellation.principal.token_type"] != "access_token" {
 		t.Errorf("token_type = %q", attrs["constellation.principal.token_type"])
+	}
+}
+
+// Issue 17 U10: the Retry-After header of the 503 uses the wait time of the error.
+func TestI17U10RetryAfterHeader(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want string
+	}{
+		"12.2 s":  {&auth.UnavailableError{Err: auth.ErrIntrospectionUnavailable, RetryAfter: 12200 * time.Millisecond}, "13"},
+		"0.3 s":   {&auth.UnavailableError{Err: auth.ErrIntrospectionUnavailable, RetryAfter: 300 * time.Millisecond}, "1"},
+		"120 s":   {&auth.UnavailableError{Err: auth.ErrIntrospectionUnavailable, RetryAfter: 120 * time.Second}, "60"},
+		"no time": {&auth.UnavailableError{Err: auth.ErrIntrospectionUnavailable}, "5"},
+		"plain":   {auth.ErrIntrospectionUnavailable, "5"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			v := &mock.Verifier{VerifyFunc: func(context.Context, string) (auth.Principal, error) {
+				return auth.Principal{}, tc.err
+			}}
+			rec := newEnv(t, v).do("Bearer tok")
+			if rec.Code != 503 || rec.Header().Get("Retry-After") != tc.want {
+				t.Fatalf("status %d Retry-After %q, want %q", rec.Code, rec.Header().Get("Retry-After"), tc.want)
+			}
+		})
 	}
 }

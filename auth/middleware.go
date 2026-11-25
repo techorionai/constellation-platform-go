@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -119,12 +121,24 @@ func writeVerifyError(ctx context.Context, w http.ResponseWriter, err error) {
 		writeBody(ctx, w, problem{Title: "Authentication required", Status: http.StatusUnauthorized, Code: "unauthorized"})
 	case errors.Is(err, ErrKeysUnavailable), errors.Is(err, ErrIntrospectionUnavailable):
 		slog.WarnContext(ctx, "auth: verification unavailable", slog.Any("error", err))
-		w.Header().Set("Retry-After", "5")
+		w.Header().Set("Retry-After", retryAfterSeconds(err))
 		writeBody(ctx, w, problem{Title: "Authentication unavailable", Status: http.StatusServiceUnavailable, Code: "auth_unavailable"})
 	default:
 		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
 		writeBody(ctx, w, problem{Title: "Authentication required", Status: http.StatusUnauthorized, Code: "unauthorized"})
 	}
+}
+
+// retryAfterSeconds returns the Retry-After header of a 503. It is the wait time
+// of the error in whole seconds, rounded up, from 1 to 60. Without a wait time
+// it is 5.
+func retryAfterSeconds(err error) string {
+	d, ok := RetryAfter(err)
+	if !ok {
+		return "5"
+	}
+	secs := int((d + time.Second - 1) / time.Second)
+	return strconv.Itoa(min(max(secs, 1), 60))
 }
 
 // RequireScopes returns the middleware that lets a request pass only if the
