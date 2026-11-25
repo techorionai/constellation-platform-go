@@ -346,3 +346,54 @@ func TestErrorHasNoToken(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func publishWith(t *testing.T, ts auth.TokenSource, h http.HandlerFunc) error {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	c, err := identity.New(identity.Config{URL: srv.URL, Timeout: 5 * time.Second, AllowInsecureHTTP: true}, ts, []string{"identity:manifest:publish"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity.NewManifestRegistry(c).Publish(context.Background(), testManifest)
+}
+
+// Issue 17 U25: a 429 or a 503 with Retry-After gives the wait time.
+func TestI17U25RetryAfter(t *testing.T) {
+	for _, status := range []int{429, 503} {
+		err := publishWith(t, okTokens(), func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", "4")
+			problem(w, status, map[string]any{"title": "x", "status": status})
+		})
+		if !errors.Is(err, manifest.ErrUnavailable) {
+			t.Fatalf("status %d: err = %v", status, err)
+		}
+		if d, ok := manifest.RetryAfter(err); !ok || d != 4*time.Second {
+			t.Fatalf("status %d: RetryAfter = %v, %v", status, d, ok)
+		}
+	}
+	// A 503 with no header, and a 429 with no header, have no wait time.
+	for _, status := range []int{429, 503} {
+		err := publishWith(t, okTokens(), func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
+		if !errors.Is(err, manifest.ErrUnavailable) {
+			t.Fatalf("status %d: err = %v", status, err)
+		}
+		if _, ok := manifest.RetryAfter(err); ok {
+			t.Fatalf("status %d: has a wait time", status)
+		}
+	}
+}
+
+// Issue 17 U26: the wait time of the token source goes to the publisher.
+func TestI17U26TokenRetryAfter(t *testing.T) {
+	ts := &mock.TokenSource{TokenFunc: func(context.Context, string, ...string) (string, error) {
+		return "", &auth.UnavailableError{Err: auth.ErrTokenUnavailable, RetryAfter: 30 * time.Second}
+	}}
+	err := publishWith(t, ts, func(http.ResponseWriter, *http.Request) {})
+	if !errors.Is(err, manifest.ErrUnavailable) || !errors.Is(err, auth.ErrTokenUnavailable) {
+		t.Fatalf("err = %v", err)
+	}
+	if d, ok := manifest.RetryAfter(err); !ok || d != 30*time.Second {
+		t.Fatalf("RetryAfter = %v, %v", d, ok)
+	}
+}

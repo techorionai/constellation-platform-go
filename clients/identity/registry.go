@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/techorionai/constellation-platform-go/auth"
+	"github.com/techorionai/constellation-platform-go/internal/retryafter"
 	"github.com/techorionai/constellation-platform-go/manifest"
 )
 
@@ -32,6 +34,8 @@ func NewManifestRegistry(c *ClientWithResponses) *ManifestRegistry {
 //	401, 403                               manifest.ErrDenied
 //	408, 429, 5xx, network error,
 //	token unavailable                      manifest.ErrUnavailable
+//	429, 503 with Retry-After,
+//	token unavailable with a wait time     *manifest.UnavailableError (see manifest.RetryAfter)
 //	other 4xx                              manifest.ErrRejected
 //	invalid_client, invalid_scope,
 //	unauthorized_client from the token
@@ -57,6 +61,9 @@ func (r *ManifestRegistry) Publish(ctx context.Context, m manifest.PermissionMan
 		return mapRequestError(err)
 	}
 	status := resp.StatusCode()
+	if ra, ok := retryAfter(resp.HTTPResponse); ok {
+		return &manifest.UnavailableError{Cause: fmt.Errorf("status %d", status), RetryAfter: ra}
+	}
 	switch status {
 	case http.StatusOK:
 		return nil
@@ -72,6 +79,15 @@ func (r *ManifestRegistry) Publish(ctx context.Context, m manifest.PermissionMan
 		}
 		return fmt.Errorf("%w: status %d", manifest.ErrUnavailable, status)
 	}
+}
+
+// retryAfter returns the wait time of a 429, or of a 503 with a valid Retry-After.
+func retryAfter(resp *http.Response) (time.Duration, bool) {
+	if resp == nil {
+		return 0, false
+	}
+	d, ok := retryafter.FromStatus(resp.StatusCode, resp.Header, time.Now())
+	return d, ok && d > 0
 }
 
 func invalidError(p *UnprocessableContent) error {
@@ -97,6 +113,7 @@ func mapRequestError(err error) error {
 		return fmt.Errorf("%w: token endpoint returned %s", manifest.ErrUnavailable, oe.Code)
 	}
 	// This covers auth.ErrTokenUnavailable, auth.ErrBadTokenResponse, a network
-	// error, and a time out.
-	return fmt.Errorf("%w: %w", manifest.ErrUnavailable, err)
+	// error, and a time out. The wait time of the token endpoint goes on.
+	ra, _ := auth.RetryAfter(err)
+	return &manifest.UnavailableError{Cause: err, RetryAfter: ra}
 }
