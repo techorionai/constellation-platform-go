@@ -245,6 +245,31 @@ An alert on a high rate of `keys_unavailable` or of `network_error` shows that t
 - A later change to `platform_secrets` follows the expand and contract rule. Each migration works with the current and the previous release of `platform-go`.
 - The calling service checks the permissions and writes the audit entries for the access to a secret. `secrets.Service` does neither.
 
+## Events
+
+- Write an event only through the outbox writer (`outbox.Writer`) in a database transaction. Never publish to a stream in the request path, and never write to the outbox table with raw SQL.
+- Delivery is at least once with no order. A handler must be idempotent by the `source` and the `id` of the event.
+- The actor of an event comes from code. A request handler uses `outbox.ActorFromPrincipal`. An event with no request principal uses `outbox.ServiceActor` with the client ID of the own service client. A consumer does not copy `actor` from a received event.
+- The stream of an app is `events.stream:<app>`. A service adds events to its own stream only. The ACL selectors are in `docs/usage.md` (`streams/valkey`).
+- A consumer group is `<app>` or `<app>.<name>`.
+- The logs and the spans never have the `data` of an event.
+
+### Event metrics and spans
+
+| Name | Type | Unit | Attributes | Meaning |
+| ---- | ---- | ---- | ---------- | ------- |
+| `constellation.outbox.published` | Counter | `{event}` | `outcome` (`ok`, `error`) | The events that the relay published. |
+| `constellation.outbox.lag` | Gauge | `s` | None | The age of the oldest unpublished outbox row. 0 if there is none. Each instance reports the same value. An alert uses `max`. |
+| `constellation.events.consumer.handled` | Counter | `{message}` | `stream`, `group`, `outcome` (`ok`, `error`, `dropped`) | The messages that a consumer handled. |
+| `constellation.events.consumer.lost` | Counter | `{message}` | `stream`, `group` | The pending messages that the trim deleted before the consumer handled them. |
+
+| Span | Kind | Meaning |
+| ---- | ---- | ------- |
+| `outbox.relay.publish` | Internal | One relay batch with 1 or more events. |
+| `events.consume` | Consumer | One message. It starts a new trace and links to the `traceparent` of the event. |
+
+- Alert when `constellation.outbox.lag` is more than a few minutes, and on a rate of `outcome=dropped` that is more than 0.
+
 ## Retention
 
 - Each retention job has a name that matches `^[a-z][a-z0-9_]{0,63}$`. The name is the value of the metric attribute `job`, and the lock name is `retention:<name>`.
@@ -254,7 +279,7 @@ An alert on a high rate of `keys_unavailable` or of `network_error` shows that t
 - A table purger works with these rules: the time column has the type `timestamptz`. The key column is the primary key, or a part of the primary key of a partitioned table. Add an index on the time column, because the delete reads the oldest rows first.
 - The retention adapters use the pool directly. A tick is not part of a caller transaction.
 - A tick uses 2 pool connections: the lock connection for the full tick, and one connection for each `Purge` call. Set `MaxConns` with spare connections for the jobs, in addition to the connections for requests.
-- A job does not delete from Valkey Streams. The outbox and relay issue (roadmap R08) trims them.
+- The retention of events uses two jobs with a default period of 3 days: `outbox` (the table purger with the time column `published_at`, which keeps unpublished rows) and `event_stream` (`streams/valkey.NewTrimPurger`, which trims the stream of the service).
 
 ## Tests
 

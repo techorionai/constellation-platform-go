@@ -29,6 +29,10 @@ go get github.com/techorionai/constellation-platform-go@vX.Y.Z
 | [`secrets/postgres`](#secretspostgres) | PostgreSQL adapter and migrations of the secrets store. |
 | [`retention`](#retention) | Background jobs that delete expired data. |
 | [`retention/postgres`](#retentionpostgres) | PostgreSQL table purger and advisory lock for retention jobs. |
+| [`outbox`](#outbox) | Transactional outbox writer and relay. |
+| [`outbox/postgres`](#outboxpostgres) | PostgreSQL outbox table, writer, store, and migrations. |
+| [`streams`](#streams) | Event stream names, consumer groups, and the consumer runner. |
+| [`streams/valkey`](#streamsvalkey) | Valkey publisher, consumer group, lag, and trim purger. |
 | [`requestid`](#requestid) | Request ID middleware. |
 | [`auth`](#auth) | Principal, token verifier port, `ByFormat`, scope checks, and HTTP middleware. |
 | [`auth/jwt`](#authjwt) | JWKS token verifier for RFC 9068 access tokens. |
@@ -79,6 +83,8 @@ defer kv.Close()
 ## Startup order
 
 A service with migrations and the admin server follows this order. A failed connection in step 3 writes an `error` log record and stops the service with a non-zero exit code. The orchestrator starts it again. `clients/postgres` and `clients/valkey` have a connect timeout, so this step does not wait for a long time. The admin server already runs during `migrate.Run`, so the liveness probe gets `200` during a long migration.
+
+A service with events runs the migrations of the outbox table first (step 5a), then its own migrations (step 5b). It starts the outbox relay, the stream consumers, and the retention jobs in step 6, after the migrations. The relay and the consumers stop when the context ends, and the consumer deletes its own consumer entry at the stop.
 
 ```go
 ctx := context.Background()
@@ -146,7 +152,19 @@ go func() {
 	}
 }()
 
-// 5. Run the migrations. A service embeds its files with
+// 5a. Run the migrations of the outbox table before the own migrations. The
+// library has its own migrations table.
+outboxMigrator, err := migratepg.NewMigrator(db.Pool, outboxpg.Migrations(),
+	migratepg.MigratorOptions{MigrationsTable: outboxpg.MigrationsTable})
+if err != nil {
+	log.Fatal(err)
+}
+if _, err := migrate.Run(ctx, migratepg.NewLocker(db.Pool, outboxpg.MigrationsTable), outboxMigrator,
+	migrate.Options{Name: outboxpg.MigrationsTable}); err != nil {
+	log.Fatal(err)
+}
+
+// 5b. Run the own migrations. A service embeds its files with
 // //go:embed migrations/*.sql and passes fs.Sub(files, "migrations").
 files := fstest.MapFS{
 	"000001_init.up.sql": {Data: []byte("CREATE TABLE users (id uuid PRIMARY KEY);")},
@@ -173,6 +191,42 @@ go func() {
 		log.Print(err)
 	}
 }()
+// Start the outbox relay, the stream consumer, and the retention jobs. The
+// relay and the consumer stop when ctx ends.
+relay, err := outbox.NewRelay(outboxpg.NewStore(db.Pool), streamsvk.NewPublisher(kv.Raw, "identity"), outbox.RelayOptions{})
+if err != nil {
+	log.Fatal(err)
+}
+go func() { _ = relay.Run(ctx) }()
+group, err := streamsvk.NewGroup(kv.Raw, streamsvk.GroupConfig{App: "identity", Stream: "helpdesk", Group: "identity"})
+if err != nil {
+	log.Fatal(err)
+}
+consumer, err := streams.NewConsumer(group, func(ctx context.Context, m streams.Message) error {
+	// The handler is idempotent by the source and the id of the event.
+	return nil
+}, streams.ConsumerOptions{})
+if err != nil {
+	log.Fatal(err)
+}
+go func() { _ = consumer.Run(ctx) }()
+outboxPurger, err := retentionpg.NewTablePurger(db.Pool, retentionpg.TableSpec{Table: outboxpg.Table, TimeColumn: "published_at"})
+if err != nil {
+	log.Fatal(err)
+}
+locker, err := retentionpg.NewLocker(db.Pool)
+if err != nil {
+	log.Fatal(err)
+}
+retentionJobs, err := retention.NewRunner(locker, []retention.Job{
+	{Name: "outbox", Config: retention.Config{Interval: time.Hour, BatchSize: 1000}, DefaultPeriod: 3 * 24 * time.Hour, Purger: outboxPurger},
+	{Name: "event_stream", Config: retention.Config{Interval: time.Hour, BatchSize: 1000}, DefaultPeriod: 3 * 24 * time.Hour,
+		Purger: streamsvk.NewTrimPurger(kv.Raw, "identity")},
+}, retention.RunnerOptions{})
+if err != nil {
+	log.Fatal(err)
+}
+go func() { _ = retentionJobs.Run(ctx) }()
 mux := http.NewServeMux()
 // Protect each route: auth.RequireScopes("demo:ticket:read")(handler)
 api := &http.Server{
@@ -1290,6 +1344,188 @@ Rules and limits:
 - The adapters use the pool directly. A retention tick is not part of a caller transaction.
 - A connection pooler such as PgBouncer in transaction mode breaks session advisory locks. Retention jobs need a direct connection or a pool in session mode.
 
+## outbox
+
+Purpose: the transactional outbox and the outbox relay. A service writes an event in the same database transaction as the business change. The relay adds the event to the Valkey stream of the service. The package has the writer rules, the relay, and the ports. It imports no database driver.
+
+Import path: `github.com/techorionai/constellation-platform-go/outbox`
+
+Environment variables: None. The service gives `outbox.Config` (`App` and `Types`) and `outbox.RelayOptions` in code.
+
+Use:
+
+```go
+// events is outbox/postgres.NewWriter(pool, outbox.Config{...}).
+err := tx.WithinTx(ctx, func(ctx context.Context) error {
+	// ... the business change ...
+	p, _ := auth.PrincipalFromContext(ctx)
+	return events.Write(ctx, outbox.Event{
+		Type:    "helpdesk.ticket.created",
+		Subject: "T-1",
+		Data:    map[string]any{"title": "Printer"},
+		Actor:   outbox.ActorFromPrincipal(p), // never build the actor from request data
+	})
+})
+```
+
+The samples are `ExampleEventWriter_Write` and `ExampleServiceActor` in `outbox/example_test.go`.
+
+### Writer rules
+
+`Write` checks the rules in this order. A broken rule returns an error that wraps a sentinel error, and no row is written. The events of one call are all written or none is written.
+
+| Order | Rule | Error |
+| ----- | ---- | ----- |
+| 1 | The context has a transaction. | `ErrNoTransaction` |
+| 2 | `Type` matches the EventType pattern of the contract and is in `Config.Types`. | `ErrUnknownEventType` |
+| 3 | `Actor.ID` has 1 to 128 characters. `Actor.Type` is a principal type. `Act` and `ActType` are set together. `Act` has 1 to 128 characters. | `ErrInvalidActor` |
+| 4 | `Subject` has a maximum of 256 characters. | `ErrInvalidSubject` |
+| 5 | `Data` marshals to a JSON object. The CloudEvent in JSON has a maximum of 256 KiB. | `ErrInvalidData`, `ErrEventTooLarge` |
+
+The writer sets `specversion` `1.0`, `id` (a UUIDv7), `source` `/<app>`, `type`, `time` (UTC), `datacontenttype`, `data`, the actor attributes, and `traceparent` from the span in the context.
+
+### Actor rules
+
+- A request handler uses `outbox.ActorFromPrincipal(principal)`. It maps `sub`, the principal type, and `act`.
+- An event with no request principal, for example an event of a timer or of a consumer, uses `outbox.ServiceActor(clientID)` with the client ID of the own service client. The attributes are `actor` = the client ID and `actortype` = `service`.
+- A consumer does not copy `actor` from the event that it reacts to.
+
+### Relay
+
+`outbox.NewRelay(store, publisher, outbox.RelayOptions{})` makes the relay. `Run(ctx)` loops until `ctx` ends and returns `nil`. `Notify()` wakes the loop with no wait. A service calls `relay.Notify()` in `Transactor.AfterCommit` after a write.
+
+| Option | Default | Limits |
+| ------ | ------- | ------ |
+| `Interval` | `1s` | `100ms` or more. The wait after an empty batch. |
+| `BatchSize` | 100 | 1 to 500. A batch has a maximum of 16 MiB of payload (`MaxBatchBytes`). |
+| `PublishTimeout` | `10s` | `1s` to `1m`. The store keeps the row locks while the relay publishes. |
+
+- A full batch (by count or by bytes) starts the next tick with no wait.
+- After an error, the relay waits from 1 s to 1 min with jitter. `Notify` does not cut this wait. The log record has the error type and not the event data.
+- More than one instance can run the relay. A crash after the publish and before the commit publishes the rows again. Delivery is at least once. The order of events is not guaranteed.
+- Metrics: `constellation.outbox.published` (counter, `{event}`, attribute `outcome` = `ok` or `error`) and `constellation.outbox.lag` (gauge, `s`, the age of the oldest unpublished row, 0 when there is none). Each instance reports the same lag. An alert uses `max`. The gauge callback has a time limit of 5 s. On an error, it logs at `warn` level and reports no value.
+- Span `outbox.relay.publish` for each batch with 1 or more events. Attributes: `constellation.outbox.events` and `outcome`.
+
+## outbox/postgres
+
+Purpose: the PostgreSQL adapter of the outbox ports. It has the table `platform_outbox`, the writer, the store of the relay, and the migrations.
+
+Import path: `github.com/techorionai/constellation-platform-go/outbox/postgres`
+
+Environment variables: None.
+
+Run the migrations before the own migrations of the service. They have their own migrations table `outboxpg.MigrationsTable`:
+
+```go
+migrator, err := migratepg.NewMigrator(db.Pool, outboxpg.Migrations(),
+	migratepg.MigratorOptions{MigrationsTable: outboxpg.MigrationsTable})
+if err != nil {
+	return err
+}
+_, err = migrate.Run(ctx, migratepg.NewLocker(db.Pool, outboxpg.MigrationsTable), migrator,
+	migrate.Options{Name: outboxpg.MigrationsTable})
+```
+
+- `NewWriter(pool, cfg)` returns the writer. It gets the transaction with `clients/postgres.TxFromContext`. A write outside a transaction returns `outbox.ErrNoTransaction`, because it would break the outbox rule. It inserts all events of one call with one batch.
+- `NewStore(pool)` returns the store. `Process` selects unpublished rows with `FOR UPDATE SKIP LOCKED`, calls the relay function, sets `published_at`, and commits. If the function fails, it rolls back.
+- The table has the columns `id`, `event_id` (unique), `type`, `payload` (jsonb, the full CloudEvent), `created_at`, and `published_at`. A later change follows the expand and contract rule.
+
+### Outbox retention
+
+Use the table purger with the time column `published_at`. A row with no `published_at` does not match, so the purger keeps the unpublished rows. The outbox lag gauge shows them. The default period is 3 days. Name the job `outbox`.
+
+```go
+purger, err := retentionpg.NewTablePurger(db.Pool, retentionpg.TableSpec{
+	Table: outboxpg.Table, TimeColumn: "published_at",
+})
+```
+
+## streams
+
+Purpose: the names of the event streams, the consumer groups, and the consumer runner. The package has the ports and the logic. It imports no Valkey driver.
+
+Import path: `github.com/techorionai/constellation-platform-go/streams`
+
+Environment variables: None.
+
+- The stream of an app is `events.stream:<app>` (`streams.StreamKey`). Stream keys do not use the `Keyspace` of the service. A service name has no `.`, so no root pattern `~<svc>:*` matches a stream key.
+- A group is named `<app>` or `<app>.<name>` (`streams.GroupName`). `<name>` matches `^[a-z][a-z0-9_]{0,31}$`. `streams.ValidGroup` checks that a group belongs to an app.
+- `streams.NewConsumer(group, handler, streams.ConsumerOptions{})` makes the consumer. `Run(ctx)` loops until `ctx` ends and returns `nil`.
+
+```go
+group, err := streamsvk.NewGroup(kv.Raw, streamsvk.GroupConfig{App: "billing", Stream: "helpdesk", Group: "billing"})
+if err != nil {
+	return err
+}
+consumer, err := streams.NewConsumer(group, func(ctx context.Context, m streams.Message) error {
+	// m.Event is the CloudEvent in JSON. Be idempotent by "source" and "id".
+	return nil
+}, streams.ConsumerOptions{})
+if err != nil {
+	return err
+}
+go func() { _ = consumer.Run(ctx) }()
+```
+
+The samples are `ExampleStreamKey` and `ExampleGroupName` in `streams/example_test.go`.
+
+| Option | Default | Limits |
+| ------ | ------- | ------ |
+| `Count` | 50 | 1 to 1000. The messages for one read or claim. |
+| `Block` | `5s` | `100ms` to `1m`. |
+| `ClaimIdle` | `5m` | `100ms` or more. A pending message that is idle longer can be claimed. |
+| `MaxDeliveries` | 10 | 1 to 1000. |
+| `CleanupInterval` | `1h` | The time between two cleanups of old consumers. |
+| `CleanupIdle` | `24h` | The idle time after which a consumer with no pending messages is deleted. |
+
+- Each loop first claims stale messages, then reads new messages. A handler that returns `nil` acknowledges the message. An error leaves the message pending, and a later claim delivers it again. Delivery is at least once with no order. A handler must be idempotent by `source` and `id`.
+- A message with more than `MaxDeliveries` deliveries is logged at `error` level, counted with `outcome=dropped`, and acknowledged. The handler does not run. There is no dead letter stream.
+- A pending message that the trim deleted is logged at `warn` level and counted as lost.
+- Each start adds a new consumer name. At the end of `Run`, the consumer deletes its own entry if it has no pending messages. Each `CleanupInterval`, it deletes the consumers of its group with no pending messages and an idle time of more than `CleanupIdle`.
+- A handler that writes a new event uses `outbox.ServiceActor`. It does not copy `actor` from the received event.
+- Span `events.consume` for each message. The span kind is consumer. It starts a new trace and has a link to the context of the `traceparent` of the event (if it is valid). It is not a child of that context. The handler gets the context of this span. Attributes: `constellation.events.stream`, `constellation.events.group`, `constellation.events.type`, `constellation.events.deliveries`, and `outcome` (`ok`, `error`, `dropped`).
+- Metrics: `constellation.events.consumer.handled` (counter, `{message}`, attributes `stream`, `group`, `outcome`) and `constellation.events.consumer.lost` (counter, `{message}`, attributes `stream`, `group`).
+- The logs and the spans never have the `data` of an event.
+
+## streams/valkey
+
+Purpose: the Valkey adapter of the event streams.
+
+Import path: `github.com/techorionai/constellation-platform-go/streams/valkey`
+
+Environment variables: None. The functions take the raw valkey-go client (`kv.Raw`).
+
+| Function | Purpose |
+| -------- | ------- |
+| `NewPublisher(c, app)` | Implements `outbox.Publisher`. One `XADD events.stream:<app> * event <json>` for each payload, in one pipeline. It sets no `MAXLEN`, because retention trims the stream. |
+| `NewGroup(c, GroupConfig)` | One consumer of a consumer group. `GroupConfig` has `App` (the own app), `Stream` (the app of the stream), `Group`, `Consumer` (default `<host>-<random>`), and `StartID` (`$` by default, or `0`). It refuses a group that is not valid for `App`. |
+| `Lag(ctx, c, app, group)` | The age of the oldest message that the group did not acknowledge. 0 if there is none. `ErrNoGroup` if the group does not exist. |
+| `Groups(ctx, c, app)` | The sorted group names of the stream. An empty list if the stream does not exist. |
+| `NewTrimPurger(c, app)` | Implements `retention.Purger`. `XTRIM events.stream:<app> MINID <ms>-0`. |
+| `ACLSelectors(app)` | The text of the two ACL selectors. |
+
+- `Claim` sends `XAUTOCLAIM` and keeps the returned cursor between calls. The cursor starts again at `0-0` when the scan ends. Then it reads the delivery count of each claimed message with `XPENDING`.
+- `TrimPurger` uses the exact form of `XTRIM` and deletes all entries that are older than the period in one call. It does not use `PurgeParams.Limit`. It also deletes entries that a group still has pending. The consumer counts them as lost. The default period is 3 days. Name the job `event_stream`.
+- A canceled context stops a blocked read.
+
+### ACL selectors
+
+Each service user keeps `~<svc>:*` and gets two selectors. The text is the result of `ACLSelectors("<svc>")`. The deploy files copy this text.
+
+```txt
+(~events.stream:<svc> +xadd +xtrim)
+(~events.stream:* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream +xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange)
+```
+
+- The first selector lets the service write and trim its own stream only. A service cannot add events to the stream of another app, so it cannot forge events of another app.
+- The second selector lets the service consume all streams.
+- Limit: the ACL cannot isolate consumer groups. A service can acknowledge or claim messages of the group of another service on any stream, and it can delete a consumer of another group. All services are platform code, and they cannot forge events. The handler counter of each group shows unexpected acknowledgements.
+- `containers.ValkeyACLEvents()` adds the two selectors to a test user.
+
+### Event retention
+
+Add two jobs to the `retention.Runner`, with the default period of 3 days: `outbox` with the table purger of `outbox/postgres`, and `event_stream` with `streamsvk.NewTrimPurger(kv.Raw, app)`. See the startup order for the code. Valkey uses `noeviction`. If the trim stops, `XADD` gets an out of memory error, the relay backs off, and the outbox lag gauge shows the problem.
+
 ## requestid
 
 Purpose: give a request ID to each HTTP request, and put it on the response, the span, and the log records.
@@ -1760,7 +1996,17 @@ var (
 	kv *valkey.Client
 )
 
-repo := orderRepo{pool: db.Pool}
+events, err := outboxpg.NewWriter(db.Pool, outbox.Config{App: "orders", Types: []string{"orders.order.renamed"}})
+if err != nil {
+	log.Fatal(err)
+}
+relay, err := outbox.NewRelay(outboxpg.NewStore(db.Pool), streamsvk.NewPublisher(kv.Raw, "orders"), outbox.RelayOptions{})
+if err != nil {
+	log.Fatal(err)
+}
+go func() { _ = relay.Run(ctx) }()
+
+repo := orderRepo{pool: db.Pool, events: events}
 tx := txpg.NewTransactor(db.Pool)
 orders := cache.New[order](cachevk.NewStore(kv), "order")
 
@@ -1774,7 +2020,10 @@ rename := executor.Func[renameOrder](func(ctx context.Context, p renameOrder) er
 		}
 		// Delete the cache entry after the commit. Then another request
 		// cannot store the old value again before the commit.
-		tx.AfterCommit(ctx, func(ctx context.Context) { _ = orders.Delete(ctx, p.ID) })
+		tx.AfterCommit(ctx, func(ctx context.Context) {
+			relay.Notify()
+			_ = orders.Delete(ctx, p.ID)
+		})
 		return nil
 	}, transaction.Name("rename_order"))
 })
@@ -1800,7 +2049,7 @@ if err != nil {
 log.Print(o.Name)
 ```
 
-`orderRepo` is a repository adapter. Its methods get the connection with `postgres.Conn(ctx, r.pool)`. The sample is `Example_command` in `example_command_test.go`.
+`orderRepo` is a repository adapter. Its methods get the connection with `postgres.Conn(ctx, r.pool)`. `writeOutbox` writes the event with `outbox.Writer` in the transaction of the caller. The actor comes from `outbox.ActorFromPrincipal` with the principal of the request. `relay.Notify()` in `AfterCommit` wakes the relay at once. The sample is `Example_command` in `example_command_test.go`.
 
 ## resources/test/containers
 
@@ -1825,6 +2074,8 @@ var t testing.TB
 
 v := containers.Valkey(t)
 user, password := v.NewACLUser(t, "identity") // an ACL user with the key prefix rule
+// containers.ValkeyACLEvents() adds the event stream selectors:
+// v.NewACLUser(t, "identity", containers.ValkeyACLEvents())
 _, _, _ = v.Address(), user, password
 ```
 
@@ -1839,6 +2090,7 @@ Rules and limits:
 - Default images: `postgres:18-alpine` and `valkey/valkey:9-alpine`. Use `WithPostgresImage` and `WithValkeyImage` to change them.
 - `NewDatabase` makes a database `test_<16 hex>` and drops it at cleanup. Tests in one package can share one container.
 - `NewACLUser` uses the rule `containers.ACLRule`. It is the same rule as the sample in the `clients/valkey` section.
+- `NewACLUser` takes options. `containers.ValkeyACLEvents()` adds the two selectors of `streams/valkey.ACLSelectors` for the prefix of the user.
 - `Stop(ctx)` stops a container before the cleanup.
 - `AdminURL()`, `Exec`, `Admin(t)`, and `AdminPassword()` give the superuser access for the setup of a test.
 
@@ -1884,7 +2136,7 @@ Rules and limits:
 
 ## resources/test/mock
 
-Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), `transaction.Transactor` (`Transactor`), `secrets.Repository` (`SecretsRepository`), `retention.Purger` (`RetentionPurger`), `retention.Locker` (`RetentionLocker`), `auth.Verifier` (`Verifier`), `auth.TokenSource` (`TokenSource`), `auth.TokenExchanger` (`TokenExchanger`), `auth.ClientAssertion` (`ClientAssertion`), and `manifest.Registry` (`ManifestRegistry`).
+Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), `transaction.Transactor` (`Transactor`), `secrets.Repository` (`SecretsRepository`), `retention.Purger` (`RetentionPurger`), `retention.Locker` (`RetentionLocker`), `auth.Verifier` (`Verifier`), `auth.TokenSource` (`TokenSource`), `auth.TokenExchanger` (`TokenExchanger`), `auth.ClientAssertion` (`ClientAssertion`), `manifest.Registry` (`ManifestRegistry`), `outbox.Writer` (`OutboxWriter`), `outbox.Inserter` (`OutboxInserter`), `outbox.Store` (`OutboxStore`), `outbox.Publisher` (`OutboxPublisher`), and `streams.Group` (`StreamGroup`).
 
 Import path: `github.com/techorionai/constellation-platform-go/resources/test/mock`
 
