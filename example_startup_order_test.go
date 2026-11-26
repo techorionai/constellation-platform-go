@@ -11,10 +11,12 @@ import (
 	"github.com/techorionai/constellation-platform-go/auth"
 	"github.com/techorionai/constellation-platform-go/auth/clientcred"
 	authjwt "github.com/techorionai/constellation-platform-go/auth/jwt"
+	"github.com/techorionai/constellation-platform-go/clients/events"
 	"github.com/techorionai/constellation-platform-go/clients/identity"
 	"github.com/techorionai/constellation-platform-go/clients/postgres"
 	"github.com/techorionai/constellation-platform-go/clients/valkey"
 	"github.com/techorionai/constellation-platform-go/config"
+	"github.com/techorionai/constellation-platform-go/eventtypes"
 	"github.com/techorionai/constellation-platform-go/health"
 	healthpg "github.com/techorionai/constellation-platform-go/health/postgres"
 	healthvk "github.com/techorionai/constellation-platform-go/health/valkey"
@@ -45,6 +47,7 @@ func Example_startupOrder() {
 		Auth     authjwt.Config    `envPrefix:"AUTH__"`
 		Client   clientcred.Config `envPrefix:"CLIENT__"`
 		Identity identity.Config   `envPrefix:"IDENTITY__"`
+		Events   events.Config     `envPrefix:"EVENTS__"`
 	}
 	// 1. Load the config.
 	if err := config.Load("IDENTITY_", &cfg); err != nil {
@@ -91,8 +94,24 @@ func Example_startupOrder() {
 	}
 	publisher := manifest.NewPublisher(identity.NewManifestRegistry(idc), perms)
 
+	// Load the event type registration. A service embeds the file with
+	// //go:embed event-types.json and checks it in a unit test. The file gives the
+	// app and the types of the outbox writer. Make the events client with the
+	// scope events:event_type:register. The service client needs the role
+	// events:producer.
+	reg, err := eventtypes.Load(fstest.MapFS{"event-types.json": {Data: []byte(
+		`{"source":"/demo","app":"demo","eventTypes":[{"type":"demo.ticket.created","description":"A ticket was created.","dataSchema":{"type":"object"}}]}`)}}, "event-types.json")
+	if err != nil {
+		log.Fatal(err)
+	}
+	evc, err := events.New(cfg.Events, tokens, []string{"events:event_type:register"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	typesPublisher := eventtypes.NewPublisher(events.NewEventTypeRegistry(evc), reg)
+
 	// 4. Start the admin server. /livez is 200. /readyz is 503.
-	state := health.NewState(pgCheck, healthvk.NewChecker(kv.Raw), publisher.Checker())
+	state := health.NewState(pgCheck, healthvk.NewChecker(kv.Raw), publisher.Checker(), typesPublisher.Checker())
 	admin := health.NewServer(cfg.Admin, state)
 	go func() {
 		if err := admin.ListenAndServe(); err != nil {
@@ -139,6 +158,19 @@ func Example_startupOrder() {
 			log.Print(err)
 		}
 	}()
+	// Register the event types in the background. /readyz is 503 until the
+	// registration succeeds.
+	go func() {
+		if err := typesPublisher.Run(ctx); err != nil {
+			log.Print(err)
+		}
+	}()
+	// The outbox writer gets its app and its types from the same file.
+	writer, err := outboxpg.NewWriter(db.Pool, outbox.Config{App: reg.App, Types: reg.Types()})
+	if err != nil {
+		log.Fatal(err)
+	}
+	_ = writer
 	// Start the outbox relay, the stream consumer, and the retention jobs. The
 	// relay and the consumer stop when ctx ends.
 	relay, err := outbox.NewRelay(outboxpg.NewStore(db.Pool), streamsvk.NewPublisher(kv.Raw, "identity"), outbox.RelayOptions{})
