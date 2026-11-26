@@ -76,6 +76,9 @@ type Principal struct {
 	// AuthTime is the auth_time claim of the token. It is the zero time if the
 	// token has none.
 	AuthTime time.Time
+	// App is the app of the service client. Only a token with principal_type
+	// "service" and the app claim gives a value.
+	App string
 }
 
 // HasMFA returns true if AuthMethods contains "mfa", Act is nil, and the token
