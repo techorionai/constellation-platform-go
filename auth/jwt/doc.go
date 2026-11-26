@@ -4,7 +4,9 @@
 // [New] makes a [Verifier] from a [Config]. The verifier accepts only ES256
 // tokens with the header typ at+jwt. It checks the signature, the issuer, the
 // audience, the time claims, and the claims of AccessTokenClaims of
-// constellation-contracts. It maps the claims to an auth.Principal.
+// constellation-contracts. It maps the claims to an auth.Principal. It reads
+// the claims amr and auth_time into AuthMethods and AuthTime. A wrong type or
+// an auth_time out of range gives auth.ErrInvalidToken.
 //
 // The verifier fetches the JWKS on the first Verify. A service can start when
 // the identity service is down. Until the first fetch works, Verify returns

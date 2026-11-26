@@ -1905,6 +1905,115 @@ paths:
                 $ref: '#/components/schemas/InternalServerError'
       x-required-scopes:
         - identity:api_token:manage_own
+  /v1/me/mfa:
+    get:
+      operationId: MeMfa_get
+      description: 'Read the MFA state of the user. Error code of `Forbidden`: `user_token_required`.'
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaStatus'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:mfa:manage_own
+  /v1/me/totp:
+    delete:
+      operationId: MeTotp_remove
+      description: |-
+        Remove the TOTP factor and all recovery codes of the user.
+        The token needs a fresh MFA login: `amr` contains `mfa` and `auth_time` is at most 5 minutes old.
+        Else the response is 401 with the code `reauthentication_required` and the header
+        `WWW-Authenticate: Bearer error="insufficient_user_authentication", error_description="A fresh MFA login is necessary", max_age="300"`.
+        A token with no `amr` (service, agent, exchange, or API token) gets the same response.
+        A token with `act` does not satisfy MFA.
+        The operation writes an audit entry with the action `identity:mfa:totp_remove`, the target user, and the result.
+        It sends a security notice to the user.
+        Error code of `Forbidden`: `user_token_required`.
+        Error code of `NotFound`: `totp_not_found`.
+        Error code of `Conflict`: `mfa_required`. The policy requires MFA for the user and TOTP is the last second factor.
+        The order of the checks: the token (401), the scopes (403), `user_token_required` (403),
+        `reauthentication_required` (401), `totp_not_found` (404), `mfa_required` (409).
+      parameters: []
+      responses:
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: |-
+            The token does not show a fresh MFA login (RFC 9470). The code is `reauthentication_required`.
+            The client must start a new authorization request with `max_age`. A token refresh does not help.
+            The header `WWW-Authenticate` is optional in this model, because the 401 response of an operation also covers `Unauthorized`.
+            An operation that uses this model always sends the header with the code `reauthentication_required`.
+          headers:
+            WWW-Authenticate:
+              required: false
+              description: Challenge, for example `Bearer error="insufficient_user_authentication", error_description="A fresh MFA login is necessary", max_age="300"`. `error_description` is optional.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/ReauthenticationRequired'
+                  - $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '409':
+          description: The request conflicts with the state of the resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:mfa:manage_own
   /v1/permission-manifests:
     get:
       operationId: PermissionManifests_list
@@ -2559,6 +2668,134 @@ paths:
                 $ref: '#/components/schemas/InternalServerError'
       x-required-scopes:
         - identity:user:write
+  /v1/users/{userId}/mfa:
+    get:
+      operationId: UserMfa_get
+      description: 'Read the MFA state of a user. The permission is `identity:mfa:read`, not `identity:user:read`. Error code of `NotFound`: `user_not_found`.'
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaStatus'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:mfa:read
+    delete:
+      operationId: UserMfa_reset
+      description: |-
+        Reset the MFA of a user. The operation removes all second factors and recovery codes of the user.
+        It revokes all sessions and refresh tokens of the user. It does not remove the password or the API tokens.
+        A user with no second factor also gives 204, and the sessions are also revoked.
+        The token needs a fresh MFA login: `amr` contains `mfa` and `auth_time` is at most 5 minutes old.
+        Else the response is 401 with the code `reauthentication_required` and the header
+        `WWW-Authenticate: Bearer error="insufficient_user_authentication", error_description="A fresh MFA login is necessary", max_age="300"`.
+        A token with no `amr` (service, agent, exchange, or API token) gets the same response.
+        A token with `act` does not satisfy MFA.
+        Error code of `NotFound`: `user_not_found`.
+        Error code of `Conflict`: `mfa_required`. The `userId` is the `sub` of the token.
+        An administrator cannot reset the own MFA with this operation. The check goes around the rule of `MeTotp_remove`.
+        The administrator uses the subcommand `identity reset-mfa <email>` of the identity service for this recovery.
+        The operation writes an audit entry with the action `identity:mfa:reset`, the target user, and the result.
+        It sends a security notice to the user.
+        The order of the checks: the token (401), the scopes (403), `reauthentication_required` (401),
+        `user_not_found` (404), `mfa_required` (409).
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 'There is no content to send for this request, but the headers may be useful. '
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: |-
+            The token does not show a fresh MFA login (RFC 9470). The code is `reauthentication_required`.
+            The client must start a new authorization request with `max_age`. A token refresh does not help.
+            The header `WWW-Authenticate` is optional in this model, because the 401 response of an operation also covers `Unauthorized`.
+            An operation that uses this model always sends the header with the code `reauthentication_required`.
+          headers:
+            WWW-Authenticate:
+              required: false
+              description: Challenge, for example `Bearer error="insufficient_user_authentication", error_description="A fresh MFA login is necessary", max_age="300"`. `error_description` is optional.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/ReauthenticationRequired'
+                  - $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '409':
+          description: The request conflicts with the state of the resource.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+      x-required-scopes:
+        - identity:mfa:reset
+        - identity:admin
   /v1/users/{userId}/roles:
     get:
       operationId: UserRoles_list
@@ -3065,6 +3302,25 @@ components:
         - config
         - api
       description: Where a role assignment comes from.
+    AuthenticationMethod:
+      anyOf:
+        - type: string
+        - type: string
+          enum:
+            - pwd
+            - otp
+            - rec
+            - hwk
+            - user
+            - fed
+            - mfa
+      description: |-
+        A method that the user used for the login of a session (RFC 8176).
+        RFC 8176 registers all values except `rec` and `fed`. The registered values are not a complete set.
+        The values are `pwd` (password), `otp` (TOTP code), `rec` (recovery code),
+        `hwk` (passkey), `user` (user verification of a passkey), `fed` (upstream OIDC login),
+        and `mfa` (two or more factors, or one passkey with user verification).
+        A service that needs MFA checks that `amr` contains `mfa`. It does not check the other values.
     BadRequest:
       type: object
       allOf:
@@ -3358,6 +3614,73 @@ components:
             - urn:ietf:params:oauth:grant-type:token-exchange
         - type: string
       description: Grant type of a token request. The union is open, so a later release can add a grant type.
+    IdTokenAudience:
+      anyOf:
+        - type: string
+        - $ref: '#/components/schemas/IdTokenAudienceList'
+      description: 'The audience of an ID token: one client ID, or an array with one or more client IDs.'
+    IdTokenAudienceList:
+      type: array
+      items:
+        type: string
+      minItems: 1
+      description: List of client IDs.
+    IdTokenClaims:
+      type: object
+      required:
+        - iss
+        - sub
+        - aud
+        - exp
+        - iat
+        - auth_time
+      properties:
+        iss:
+          type: string
+          format: uri
+          description: The URL of the identity service.
+        sub:
+          type: string
+          description: The ID of the user.
+        aud:
+          allOf:
+            - $ref: '#/components/schemas/IdTokenAudience'
+          description: The client ID.
+        exp:
+          type: integer
+          format: int64
+          description: Expiry time in seconds since the Unix epoch.
+        iat:
+          type: integer
+          format: int64
+          description: Issue time in seconds since the Unix epoch.
+        auth_time:
+          type: integer
+          format: int64
+          description: The time of the last login of the session. The identity service always sets it.
+        nonce:
+          type: string
+          description: The `nonce` of the authorize request.
+        sid:
+          type: string
+          description: The ID of the session (OIDC Front-Channel and Back-Channel Logout).
+        amr:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthenticationMethod'
+          description: The methods that the user used for the login of the session. The same rule as in `AccessTokenClaims`.
+        email:
+          type: string
+          description: Only with the scope `email`.
+        email_verified:
+          type: boolean
+          description: Only with the scope `email`.
+        name:
+          type: string
+          description: Only with the scope `profile`.
+      description: |-
+        Claims of an ID token (OIDC Core 1.0 section 2).
+        The identity service writes `aud` as one string. A verifier accepts both forms.
     InternalServerError:
       type: object
       allOf:
@@ -3516,6 +3839,30 @@ components:
             $ref: '#/components/schemas/JsonWebKey'
           description: The public keys.
       description: A set of public keys in JWK format.
+    MfaStatus:
+      type: object
+      required:
+        - enabled
+        - required
+        - recoveryCodesRemaining
+      properties:
+        enabled:
+          type: boolean
+          description: The user has one or more second factors.
+        required:
+          type: boolean
+          description: The policy requires MFA for this user, for example an admin.
+        totp:
+          allOf:
+            - $ref: '#/components/schemas/TotpStatus'
+          description: Present when TOTP is set up. Absent when TOTP is not set up.
+        recoveryCodesRemaining:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 10
+          description: The number of recovery codes that are not used.
+      description: The MFA state of a user. A client ignores a field that it does not know.
     NoStoreHeaders:
       type: object
       description: |-
@@ -3720,6 +4067,15 @@ components:
           type: string
           description: Token for the next page. No value means that this is the last page.
       description: One page of manifests.
+    ReauthenticationRequired:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: |-
+        The token does not show a fresh MFA login (RFC 9470). The code is `reauthentication_required`.
+        The client must start a new authorization request with `max_age`. A token refresh does not help.
+        The header `WWW-Authenticate` is optional in this model, because the 401 response of an operation also covers `Unauthorized`.
+        An operation that uses this model always sends the header with the code `reauthentication_required`.
     RequestScopeString:
       type: string
       maxLength: 4096
@@ -4022,7 +4378,7 @@ components:
         id_token:
           type: string
           format: password
-          description: ID token. Present if the request had the scope `openid`.
+          description: ID token. Present if the request had the scope `openid`. Its claims are the model `IdTokenClaims`.
         issued_token_type:
           allOf:
             - $ref: '#/components/schemas/TokenType'
@@ -4049,6 +4405,20 @@ components:
       allOf:
         - $ref: '#/components/schemas/Problem'
       description: The client sent too many requests.
+    TotpStatus:
+      type: object
+      required:
+        - createdAt
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+          description: The time of the TOTP setup.
+        lastUsedAt:
+          type: string
+          format: date-time
+          description: The time of the last accepted TOTP code. Absent when no code was used.
+      description: The TOTP factor of a user.
     Unauthorized:
       type: object
       allOf:

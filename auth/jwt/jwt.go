@@ -250,6 +250,8 @@ type claims struct {
 	PrincipalType string
 	Scope         string
 	Act           *actClaim
+	Amr           []string
+	AuthTime      *float64
 }
 
 type actClaim struct {
@@ -315,6 +317,21 @@ func parseClaims(payload []byte) (claims, error) {
 		ClientID: r.str("client_id"), PrincipalType: r.str("principal_type"), Scope: r.str("scope"),
 	}
 	c.Aud, _ = r.raw("aud")
+	c.AuthTime = r.num("auth_time")
+	if raw, ok := r.raw("amr"); ok {
+		var items []json.RawMessage
+		if err := json.Unmarshal(raw, &items); err != nil {
+			r.bad = true
+		}
+		for _, it := range items {
+			var s string
+			if string(it) == "null" || json.Unmarshal(it, &s) != nil {
+				r.bad = true
+				break
+			}
+			c.Amr = append(c.Amr, s)
+		}
+	}
 	if raw, ok := r.raw("act"); ok {
 		a, err := newClaimReader(raw)
 		if err != nil {
@@ -404,6 +421,17 @@ func (v *Verifier) principal(c claims) (auth.Principal, error) {
 			return auth.Principal{}, invalid("iat in the future")
 		}
 	}
+	var authTime time.Time
+	if c.AuthTime != nil {
+		at, ok := unixTime(*c.AuthTime)
+		if !ok {
+			return auth.Principal{}, invalid("auth_time out of range")
+		}
+		if at.After(now.Add(v.cfg.Leeway)) {
+			return auth.Principal{}, invalid("auth_time in the future")
+		}
+		authTime = at
+	}
 	ptype := auth.PrincipalType(c.PrincipalType)
 	if c.Sub == "" || c.ClientID == "" || !ptype.Valid() {
 		return auth.Principal{}, invalid("sub, client_id, or principal_type")
@@ -414,7 +442,7 @@ func (v *Verifier) principal(c claims) (auth.Principal, error) {
 	}
 	p := auth.Principal{
 		ID: c.Sub, Type: ptype, ClientID: c.ClientID, Scopes: scopes, Audience: v.cfg.Audience,
-		TokenType: auth.TokenTypeAccess,
+		TokenType: auth.TokenTypeAccess, AuthMethods: c.Amr, AuthTime: authTime,
 	}
 	if c.Act != nil {
 		atype := auth.PrincipalType(c.Act.PrincipalType)

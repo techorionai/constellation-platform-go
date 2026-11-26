@@ -1355,9 +1355,34 @@ mux.Handle("GET /tickets", auth.RequireScopes("demo:ticket:read")(read))
 handler := requestid.Middleware()(auth.Middleware(verifier)(mux))
 ```
 
+MFA. Use `RequireMFA` after `RequireScopes` for a sensitive route:
+
+```go
+mux.Handle("DELETE /tickets", auth.RequireScopes("demo:ticket:admin")(auth.RequireMFA(5*time.Minute)(read)))
+```
+
+If the handler has checks that come first (for example a check of the token type with the status 403), call `CheckMFA` in the handler after these checks. A strict handler returns the generated 401 response of the operation with the header value `auth.MFAChallenge(maxAge)`. A plain handler calls `auth.WriteReauthenticationRequired`:
+
+```go
+func remove(w http.ResponseWriter, r *http.Request) {
+	p, _ := auth.PrincipalFromContext(r.Context())
+	// ... other checks first ...
+	const maxAge = 5 * time.Minute
+	if err := auth.CheckMFA(p, maxAge, time.Now()); err != nil {
+		auth.WriteReauthenticationRequired(w, r, maxAge)
+		return
+	}
+	// ... the sensitive action ...
+}
+```
+
 Types:
 
-- `Principal` has `ID`, `Type` (`user`, `agent`, `service`, or `workflow`), `ClientID`, `Scopes`, `Audience`, and `Act` (the acting principal, or nil).
+- `Principal` has `ID`, `Type` (`user`, `agent`, `service`, or `workflow`), `ClientID`, `Scopes`, `Audience`, `Act` (the acting principal, or nil), `TokenType`, `AuthMethods` (the `amr` claim, empty if the token has none), and `AuthTime` (the `auth_time` claim, the zero time if the token has none).
+- `Principal.HasMFA` returns true if `AuthMethods` contains `mfa`. It does not check `Act` and it does not check the age of `AuthTime`. A sensitive action must use `auth.CheckMFA` or `auth.RequireMFA`.
+- `auth.CheckMFA(p, maxAge, now)` returns nil if the principal shows a fresh MFA login. Else it returns an error that wraps `ErrReauthenticationRequired`.
+- `auth.MFAChallenge(maxAge)` returns the value of the `WWW-Authenticate` header of the refusal. `auth.WriteReauthenticationRequired(w, r, maxAge)` writes the 401 refusal.
+- `auth.RequireMFA(maxAge)` is the middleware form of `CheckMFA`.
 - `Verifier` is the port: `Verify(ctx, token) (Principal, error)`.
 - `Principal.HasScopes` and `Principal.MissingScopes` check the scopes.
 
@@ -1374,6 +1399,7 @@ Errors. `Verify` wraps one of these errors, so `errors.Is` works. The middleware
 | `ErrIntrospectionUnavailable` (identity is down, the client is rejected, the response is not valid, identity returned 429, or too many identity calls run) | 503, `Retry-After` from the error (5 if the error has no wait time) | none | `auth_unavailable` | `Authentication unavailable` | `unavailable` |
 | Other error | 401 | `Bearer error="invalid_token"` | `unauthorized` | `Authentication required` | `invalid` |
 | Missing scope (from `RequireScopes`) | 403 | `Bearer error="insufficient_scope", scope="..."` | `insufficient_scope` | `Missing scopes` | Not counted |
+| `ErrReauthenticationRequired` (from `CheckMFA`, `RequireMFA`, or `WriteReauthenticationRequired`) | 401 | `Bearer error="insufficient_user_authentication", error_description="A fresh MFA login is necessary", max_age="<seconds>"` | `reauthentication_required` | `Reauthentication required` | Not counted |
 
 A 403 body also has `missingScopes`, the list of the scopes that the principal lacks.
 
@@ -1387,6 +1413,12 @@ Rules and limits:
 - On success, the span gets `enduser.id`, `constellation.principal.type`, `constellation.client.id`, and `constellation.principal.token_type`. The log records get `principal.id`, `principal.type`, `client.id`, and `principal.token_type`. If `Principal.Act` is not nil, the span also gets `constellation.principal.act.id` and `constellation.principal.act.type`, and the log records get `principal.act.id` and `principal.act.type`.
 - `Principal.TokenType` is `auth.TokenTypeAccess` (a JWT, also the zero value) or `auth.TokenTypeAPI` (a personal API token). A service can refuse API tokens on a route with `p.TokenType.OrAccess() == auth.TokenTypeAPI`.
 - `RequireScopes` fails closed. If the context has no principal (the chain has no `auth.Middleware`), it returns a 500 problem with the code `auth_not_configured`, writes one `error` log record, and does not call the next handler.
+- `CheckMFA` refuses in this order: an API token, a principal with `Act`, a principal without `mfa` in `AuthMethods`, a `maxAge` less than 0, and an `AuthTime` that is zero or older than `maxAge`. With `maxAge` 0, it does not check the age.
+- The age limit is inclusive: an `auth_time` exactly `maxAge` before `now` passes. `CheckMFA` adds no leeway to `maxAge`. The error text has the reason and is never in a response body.
+- `MFAChallenge` gives `max_age` in whole seconds, rounded up. With `maxAge` 0 or less, the value has no `max_age`.
+- `RequireMFA` goes after `auth.Middleware` and `auth.RequireScopes`. It fails closed: with no principal in the context, it returns 500 `auth_not_configured`, writes one `error` log record, and does not call the next handler. `RequireMFA` with a `maxAge` less than 0 panics when the service makes the middleware. It is not counted in `constellation.auth.verify`.
+- A route that refuses API tokens and agent tokens uses `RequireMFA`, because an API token has no `amr` and a token with `Act` does not satisfy MFA.
+- For `insufficient_user_authentication`, a client must not refresh the token. It starts a new login with `max_age`.
 - The token is never in a log record, a span, a metric, or an error body.
 - The principal comes only from the verified token. Never read it from a header or from baggage.
 - Each service checks the audience and the scopes of each request.
@@ -1446,6 +1478,7 @@ Rules and limits:
 - A token with an unknown `kid` starts one refetch, at most once in `MinRefetchInterval`. Concurrent calls share one fetch. If the rate limit blocks the refetch, `Verify` returns `ErrKeysUnavailable`, and the middleware answers 503 with `Retry-After`. The client can retry. Any caller with an unknown `kid` can start a window of up to `MinRefetchInterval`. A service that rotates keys must publish the new key before it signs tokens with it.
 - The JWKS fetch does not follow redirects. A redirect response is a failed fetch (`http_error`).
 - `Verify` returns when the context of the caller ends, with an error that wraps `ErrKeysUnavailable` and the context error. The shared fetch continues for the other callers.
+- The claim `amr` must be an array of strings. A missing claim and an empty array give empty `AuthMethods`. The verifier keeps values that it does not know. Another type gives `ErrInvalidToken`. The claim `auth_time` must be a number in the years 1 to 9999 and not more than `Leeway` in the future. A missing claim gives the zero `AuthTime`. Another value gives `ErrInvalidToken`.
 - A time claim (`exp`, `nbf`, `iat`) that is not in the years 1 to 9999 gives `ErrInvalidToken`. The verifier reads claims by their exact names. A claim such as `SCOPE` is not the claim `scope`.
 - `Start` is optional. Without it, the cache refreshes only when a token has an unknown `kid`. `Close` ends a running refresh fetch and waits for the loop. A second `Close` does nothing. `Start` after `Close` does nothing. `Verify` after `Close` still uses the cached keys.
 - Metric `constellation.auth.jwks.fetch` (counter, unit `{fetch}`) has the attribute `outcome` with the values `ok`, `http_error`, `bad_body`, `too_large`, `no_keys`, and `network_error`.
@@ -1873,6 +1906,7 @@ Errors: None.
 
 Rules and limits:
 
+- `mock.MFAPrincipal(id, authTime)` returns a user principal with an access token, `AuthMethods` `pwd`, `otp`, and `mfa`, and the given `AuthTime`. Use it with `auth.CheckMFA` in a test.
 - A mock replaces a port only in a unit test. A server-side integration test uses a test container and a live dependency.
 - Each mock has a function field for each method (`LockFunc`, `UnlockFunc`, `UpFunc`, `CheckFunc`, `VerifyFunc`, `TokenFunc`, `ExchangeFunc`, `AssertionFunc`, `PublishFunc`). If the field is nil, the mock succeeds. The exceptions are `Verifier`, `TokenSource`, `TokenExchanger`, and `ClientAssertion`: if `VerifyFunc` is nil, `Verify` returns `auth.ErrInvalidToken`, if `TokenFunc` or `ExchangeFunc` is nil, `Token` or `Exchange` returns `auth.ErrTokenUnavailable`, and if `AssertionFunc` is nil, `Assertion` returns an error, so a mock that is not set up fails closed. `ClientAssertion.ID` is the value of `ClientID`. Each mock counts its calls (`LockCalls`, `UnlockCalls`, `UpCalls`, `CheckCalls`, `VerifyCalls`, `TokenCalls`, `ExchangeCalls`, `AssertionCalls`, `PublishCalls`).
 - `CacheStore` keeps the values in a map and applies `cache.CheckKey`, `cache.CheckTTL`, and `cache.CheckValue`. It has the fields `GetFunc`, `SetFunc`, and `DeleteFunc`, the counts `GetCalls`, `SetCalls`, and `DeleteCalls`, and the helpers `Put`, `Value`, and `TTL`.
