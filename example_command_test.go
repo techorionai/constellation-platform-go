@@ -7,12 +7,16 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/techorionai/constellation-platform-go/auth"
 	"github.com/techorionai/constellation-platform-go/cache"
 	cachevk "github.com/techorionai/constellation-platform-go/cache/valkey"
 	"github.com/techorionai/constellation-platform-go/clients/postgres"
 	"github.com/techorionai/constellation-platform-go/clients/valkey"
 	"github.com/techorionai/constellation-platform-go/decorators"
 	"github.com/techorionai/constellation-platform-go/executor"
+	"github.com/techorionai/constellation-platform-go/outbox"
+	outboxpg "github.com/techorionai/constellation-platform-go/outbox/postgres"
+	streamsvk "github.com/techorionai/constellation-platform-go/streams/valkey"
 	"github.com/techorionai/constellation-platform-go/transaction"
 	txpg "github.com/techorionai/constellation-platform-go/transaction/postgres"
 )
@@ -29,24 +33,32 @@ type order struct {
 
 // orderRepo is a repository adapter. It gets its connection with postgres.Conn
 // for each call, so it joins the transaction of the caller.
-type orderRepo struct{ pool *pgxpool.Pool }
+type orderRepo struct {
+	pool   *pgxpool.Pool
+	events outbox.Writer
+}
 
 func (r orderRepo) rename(ctx context.Context, id, name string) error {
 	_, err := postgres.Conn(ctx, r.pool).Exec(ctx, `UPDATE orders SET name = $2 WHERE id = $1`, id, name)
 	return err
 }
 
-// writeOutbox writes the event row in the same transaction as the change.
+// writeOutbox writes the event in the same transaction as the change. The actor
+// comes from the verified principal of the request.
 func (r orderRepo) writeOutbox(ctx context.Context, id string) error {
-	_, err := postgres.Conn(ctx, r.pool).Exec(ctx,
-		`INSERT INTO outbox (topic, key) VALUES ('order.renamed', $1)`, id)
-	return err
+	p, _ := auth.PrincipalFromContext(ctx)
+	return r.events.Write(ctx, outbox.Event{
+		Type:    "orders.order.renamed",
+		Subject: id,
+		Data:    map[string]any{"id": id},
+		Actor:   outbox.ActorFromPrincipal(p),
+	})
 }
 
-// Example_command shows a command with a repository and the outbox pattern in
-// one WithinTx, a cache Delete through AfterCommit, and the tracing and logging
-// decorators. It has no Output comment, because it needs PostgreSQL and Valkey
-// servers.
+// Example_command shows a command with a repository and the outbox in one
+// WithinTx, a relay wake-up and a cache Delete through AfterCommit, and the
+// tracing and logging decorators. It has no Output comment, because it needs
+// PostgreSQL and Valkey servers.
 func Example_command() {
 	ctx := context.Background()
 	var (
@@ -54,7 +66,17 @@ func Example_command() {
 		kv *valkey.Client
 	)
 
-	repo := orderRepo{pool: db.Pool}
+	events, err := outboxpg.NewWriter(db.Pool, outbox.Config{App: "orders", Types: []string{"orders.order.renamed"}})
+	if err != nil {
+		log.Fatal(err)
+	}
+	relay, err := outbox.NewRelay(outboxpg.NewStore(db.Pool), streamsvk.NewPublisher(kv.Raw, "orders"), outbox.RelayOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	go func() { _ = relay.Run(ctx) }()
+
+	repo := orderRepo{pool: db.Pool, events: events}
 	tx := txpg.NewTransactor(db.Pool)
 	orders := cache.New[order](cachevk.NewStore(kv), "order")
 
@@ -68,7 +90,10 @@ func Example_command() {
 			}
 			// Delete the cache entry after the commit. Then another request
 			// cannot store the old value again before the commit.
-			tx.AfterCommit(ctx, func(ctx context.Context) { _ = orders.Delete(ctx, p.ID) })
+			tx.AfterCommit(ctx, func(ctx context.Context) {
+				relay.Notify()
+				_ = orders.Delete(ctx, p.ID)
+			})
 			return nil
 		}, transaction.Name("rename_order"))
 	})

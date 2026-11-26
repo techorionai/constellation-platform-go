@@ -21,7 +21,13 @@ import (
 	"github.com/techorionai/constellation-platform-go/manifest"
 	"github.com/techorionai/constellation-platform-go/migrate"
 	migratepg "github.com/techorionai/constellation-platform-go/migrate/postgres"
+	"github.com/techorionai/constellation-platform-go/outbox"
+	outboxpg "github.com/techorionai/constellation-platform-go/outbox/postgres"
 	"github.com/techorionai/constellation-platform-go/requestid"
+	"github.com/techorionai/constellation-platform-go/retention"
+	retentionpg "github.com/techorionai/constellation-platform-go/retention/postgres"
+	"github.com/techorionai/constellation-platform-go/streams"
+	streamsvk "github.com/techorionai/constellation-platform-go/streams/valkey"
 	"github.com/techorionai/constellation-platform-go/telemetry"
 )
 
@@ -94,7 +100,19 @@ func Example_startupOrder() {
 		}
 	}()
 
-	// 5. Run the migrations. A service embeds its files with
+	// 5a. Run the migrations of the outbox table before the own migrations. The
+	// library has its own migrations table.
+	outboxMigrator, err := migratepg.NewMigrator(db.Pool, outboxpg.Migrations(),
+		migratepg.MigratorOptions{MigrationsTable: outboxpg.MigrationsTable})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if _, err := migrate.Run(ctx, migratepg.NewLocker(db.Pool, outboxpg.MigrationsTable), outboxMigrator,
+		migrate.Options{Name: outboxpg.MigrationsTable}); err != nil {
+		log.Fatal(err)
+	}
+
+	// 5b. Run the own migrations. A service embeds its files with
 	// //go:embed migrations/*.sql and passes fs.Sub(files, "migrations").
 	files := fstest.MapFS{
 		"000001_init.up.sql": {Data: []byte("CREATE TABLE users (id uuid PRIMARY KEY);")},
@@ -121,6 +139,42 @@ func Example_startupOrder() {
 			log.Print(err)
 		}
 	}()
+	// Start the outbox relay, the stream consumer, and the retention jobs. The
+	// relay and the consumer stop when ctx ends.
+	relay, err := outbox.NewRelay(outboxpg.NewStore(db.Pool), streamsvk.NewPublisher(kv.Raw, "identity"), outbox.RelayOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	go func() { _ = relay.Run(ctx) }()
+	group, err := streamsvk.NewGroup(kv.Raw, streamsvk.GroupConfig{App: "identity", Stream: "helpdesk", Group: "identity"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	consumer, err := streams.NewConsumer(group, func(ctx context.Context, m streams.Message) error {
+		// The handler is idempotent by the source and the id of the event.
+		return nil
+	}, streams.ConsumerOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	go func() { _ = consumer.Run(ctx) }()
+	outboxPurger, err := retentionpg.NewTablePurger(db.Pool, retentionpg.TableSpec{Table: outboxpg.Table, TimeColumn: "published_at"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	locker, err := retentionpg.NewLocker(db.Pool)
+	if err != nil {
+		log.Fatal(err)
+	}
+	retentionJobs, err := retention.NewRunner(locker, []retention.Job{
+		{Name: "outbox", Config: retention.Config{Interval: time.Hour, BatchSize: 1000}, DefaultPeriod: 3 * 24 * time.Hour, Purger: outboxPurger},
+		{Name: "event_stream", Config: retention.Config{Interval: time.Hour, BatchSize: 1000}, DefaultPeriod: 3 * 24 * time.Hour,
+			Purger: streamsvk.NewTrimPurger(kv.Raw, "identity")},
+	}, retention.RunnerOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	go func() { _ = retentionJobs.Run(ctx) }()
 	mux := http.NewServeMux()
 	// Protect each route: auth.RequireScopes("demo:ticket:read")(handler)
 	api := &http.Server{
