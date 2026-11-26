@@ -1,0 +1,5 @@
+package: events
+generate:
+  client: true
+  models: true
+output: events.gen.go
