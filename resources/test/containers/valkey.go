@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	valkeygo "github.com/valkey-io/valkey-go"
 
 	"github.com/techorionai/constellation-platform-go/config"
+	streamsvalkey "github.com/techorionai/constellation-platform-go/streams/valkey"
 )
 
 // DefaultValkeyImage is the default Valkey image.
@@ -96,10 +98,30 @@ func (v *ValkeyInstance) Admin(t testing.TB) valkeygo.Client {
 	return c
 }
 
+// ACLOption changes the ACL user that [ValkeyInstance.NewACLUser] makes.
+type ACLOption func(*aclOptions)
+
+type aclOptions struct {
+	events bool
+}
+
+// ValkeyACLEvents adds the two ACL selectors for the event streams. The
+// selectors are the text of streams/valkey.ACLSelectors for the prefix of the
+// user.
+func ValkeyACLEvents() ACLOption {
+	return func(o *aclOptions) { o.events = true }
+}
+
+var selectorPattern = regexp.MustCompile(`\([^)]*\)`)
+
 // NewACLUser makes an ACL user that can access the keys ~<prefix>:* only, with
-// the command rule [ACLRule].
-func (v *ValkeyInstance) NewACLUser(t testing.TB, prefix string) (string, config.Secret) {
+// the command rule [ACLRule]. An option can add more rules.
+func (v *ValkeyInstance) NewACLUser(t testing.TB, prefix string, opts ...ACLOption) (string, config.Secret) {
 	t.Helper()
+	var o aclOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
 		t.Fatalf("containers: random name: %v", err)
@@ -109,6 +131,9 @@ func (v *ValkeyInstance) NewACLUser(t testing.TB, prefix string) (string, config
 	admin := v.Admin(t)
 	args := []string{"ACL", "SETUSER", user, "on", ">" + password, "~" + prefix + ":*"}
 	args = append(args, strings.Fields(ACLRule)...)
+	if o.events {
+		args = append(args, selectorPattern.FindAllString(streamsvalkey.ACLSelectors(prefix), -1)...)
+	}
 	if err := admin.Do(context.Background(), admin.B().Arbitrary(args[0]).Args(args[1:]...).Build()).Error(); err != nil {
 		t.Fatalf("containers: ACL SETUSER: %v", err)
 	}
