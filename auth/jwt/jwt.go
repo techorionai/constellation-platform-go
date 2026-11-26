@@ -252,6 +252,8 @@ type claims struct {
 	Act           *actClaim
 	Amr           []string
 	AuthTime      *float64
+	// App is the raw app claim. The verifier reads it only for a service token.
+	App json.RawMessage
 }
 
 type actClaim struct {
@@ -318,6 +320,7 @@ func parseClaims(payload []byte) (claims, error) {
 	}
 	c.Aud, _ = r.raw("aud")
 	c.AuthTime = r.num("auth_time")
+	c.App, _ = r.raw("app")
 	if raw, ok := r.m["amr"]; ok {
 		var items []json.RawMessage
 		if string(raw) == "null" || json.Unmarshal(raw, &items) != nil {
@@ -443,6 +446,13 @@ func (v *Verifier) principal(c claims) (auth.Principal, error) {
 	p := auth.Principal{
 		ID: c.Sub, Type: ptype, ClientID: c.ClientID, Scopes: scopes, Audience: v.cfg.Audience,
 		TokenType: auth.TokenTypeAccess, AuthMethods: c.Amr, AuthTime: authTime,
+	}
+	if ptype == auth.PrincipalService && c.App != nil {
+		var app string
+		if err := json.Unmarshal(c.App, &app); err != nil || !auth.ValidAppKey(app) {
+			return auth.Principal{}, invalid("app")
+		}
+		p.App = app
 	}
 	if c.Act != nil {
 		atype := auth.PrincipalType(c.Act.PrincipalType)

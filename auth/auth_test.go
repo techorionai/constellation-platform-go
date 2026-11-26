@@ -478,3 +478,15 @@ func TestRequireScopesIdentityAdmin(t *testing.T) {
 		t.Errorf("missingScopes %v", p.MissingScopes)
 	}
 }
+
+func TestValidAppKey(t *testing.T) {
+	long := "a" + strings.Repeat("b", 31)
+	for s, want := range map[string]bool{
+		"helpdesk": true, "a": true, "a_1": true, long: true, long + "c": false,
+		"": false, "1a": false, "Ab": false, "a-b": false, "_a": false, "a\n": false,
+	} {
+		if got := auth.ValidAppKey(s); got != want {
+			t.Errorf("ValidAppKey(%q) = %v, want %v", s, got, want)
+		}
+	}
+}

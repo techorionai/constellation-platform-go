@@ -183,6 +183,7 @@ Spans: `auth.clientcred.token` (token request), `auth.clientcred.exchange` (toke
 | Metric | Type | Unit | Attributes | Meaning |
 | ------ | ---- | ---- | ---------- | ------- |
 | `constellation.manifest.publish` | Counter | `{attempt}` | `outcome` (`ok`, `invalid`, `rejected`, `denied`, `unavailable`) | One count for each publish attempt of the `manifest` publisher. An alert on `denied` shows a wrong client config. An alert on `invalid` shows a wrong manifest. An alert on `rejected` shows a fixed 4xx refusal of the registry. |
+| `constellation.events.register` | Counter | `{attempt}` | `outcome` (`ok`, `invalid`, `rejected`, `denied`, `unavailable`) | One count for each registration attempt of the `eventtypes` publisher. An alert on `denied` shows a wrong client config or a missing role `events:producer`. An alert on `invalid` shows a wrong registration file. An alert on `rejected` shows a fixed 4xx refusal of the registry. An alert on `unavailable` shows that the events service is not reachable, and that new instances are not ready. |
 
 An alert on a high rate of `keys_unavailable` or of `network_error` shows that the service cannot reach the identity service. An alert on a high rate of `wrong_audience` can show a client that calls the wrong service.
 
@@ -198,12 +199,13 @@ An alert on a high rate of `keys_unavailable` or of `network_error` shows that t
 - The introspection cache of `auth/introspect` is in memory and not in Valkey. Each service has its own Valkey key prefix and ACL user, and cannot read the keys of the identity service. A revoked API token works for a maximum of `CacheTTL` (60 s at most) in each service instance.
 - A cache key that comes from a token is a SHA-256 hash. The cache never holds the raw token as a key. This applies to `auth/introspect` and to the exchange cache of `auth/clientcred`.
 - Use `auth.ByFormat(jwtVerifier, introspectVerifier)` to accept both JWT access tokens and personal API tokens. A service that must refuse API tokens on a route checks `Principal.TokenType`.
-- A client of a platform service treats the status 429 as "unavailable" and waits for the `Retry-After` header before the next call. It does the same for the status 503 with a valid `Retry-After` header. A 503 with no valid header starts no wait time. `auth.RetryAfter` and `manifest.RetryAfter` return the wait time of an error. A call that the wait time stops makes no request and is not counted in the metric, the same as a cache hit.
+- A client of a platform service treats the status 429 as "unavailable" and waits for the `Retry-After` header before the next call. It does the same for the status 503 with a valid `Retry-After` header. A 503 with no valid header starts no wait time. `auth.RetryAfter`, `manifest.RetryAfter`, and `eventtypes.RetryAfter` return the wait time of an error. A call that the wait time stops makes no request and is not counted in the metric, the same as a cache hit.
 - The outcome `overloaded` of `constellation.auth.introspect` also covers the local limit `MaxCallsPerSecond` of `auth/introspect`.
 
 ## Generated code
 
 - The generated identity client is `clients/identity/identity.gen.go`. It comes from `api/openapi/Constellation.Identity.openapi.yaml`, a copy of a file of a `constellation-contracts` release tag. The tag is in `api/openapi/CONTRACTS_VERSION`.
+- The generated events client is `clients/events/events.gen.go`. It comes from `api/openapi/Constellation.Events.openapi.yaml`, a copy of a file of the same release tag.
 - Never change a generated file or the OpenAPI copy by hand. A change goes into `constellation-contracts` first.
 - CI runs `go generate ./... && git diff --exit-code` before the unit tests. A stale generated file fails the CI.
 - The linters skip files with the `Code generated` header. Only `clients/identity` can import the `oapi-codegen` runtime. A `depguard` rule enforces it.

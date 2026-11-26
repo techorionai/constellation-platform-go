@@ -1,19 +1,14 @@
 package identity_test
 
 import (
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/techorionai/constellation-platform-go/clients/identity"
 )
 
-// Issue 18 U20: the contract is v0.5.0 and the generated client has the MFA operations.
+// Issue 18 U20: the generated client has the MFA operations. Issue 22 drops the
+// check of the version, because it blocks each new copy of the contract.
 func TestU20ContractV050(t *testing.T) {
-	raw, err := os.ReadFile("../../api/openapi/CONTRACTS_VERSION")
-	if err != nil || strings.TrimSpace(string(raw)) != "v0.5.0" {
-		t.Fatalf("CONTRACTS_VERSION = %q, %v", raw, err)
-	}
 	// The code compiles only if the generated names exist.
 	_ = (*identity.ClientWithResponses).MeMfaGetWithResponse
 	_ = (*identity.ClientWithResponses).MeTotpRemoveWithResponse

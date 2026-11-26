@@ -263,6 +263,11 @@ func TestU14Load(t *testing.T) {
 	if _, err := manifest.Load(fstest.MapFS{}, "missing.json"); err == nil {
 		t.Error("no error for a missing file")
 	}
+	for _, tail := range []string{"}", "]", "{}"} {
+		if err := load(validJSON + tail); err == nil {
+			t.Errorf("no error for trailing %q", tail)
+		}
+	}
 	if err := load("{"); err == nil {
 		t.Error("no error for bad JSON")
 	}

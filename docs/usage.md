@@ -39,7 +39,9 @@ go get github.com/techorionai/constellation-platform-go@vX.Y.Z
 | [`auth/introspect`](#authintrospect) | Verifier for personal API tokens, with introspection and an in-memory cache. |
 | [`auth/clientcred`](#authclientcred) | Client credentials token source and token exchange with `private_key_jwt`. |
 | [`clients/identity`](#clientsidentity) | Generated identity client and manifest registry adapter. |
+| [`clients/events`](#clientsevents) | Generated events client and event type registry adapter. |
 | [`manifest`](#manifest) | Publish the permission manifest of a service at startup. |
+| [`eventtypes`](#eventtypes) | Check and register the event types of a service at startup. |
 | [`resources/test/containers`](#resourcestestcontainers) | Start PostgreSQL and Valkey containers in tests. |
 | [`resources/test/issuer`](#resourcestestissuer) | Test token issuer with a JWKS endpoint. |
 | [`resources/test/mock`](#resourcestestmock) | Mocks of ports. |
@@ -90,13 +92,14 @@ A service with events runs the migrations of the outbox table first (step 5a), t
 ctx := context.Background()
 
 var cfg struct {
-	LogLevel slog.Level      `env:"LOG_LEVEL" envDefault:"INFO"`
-	Database postgres.Config `envPrefix:"DATABASE__"`
-	Valkey   valkey.Config   `envPrefix:"VALKEY__"`
-	Admin    health.Config   `envPrefix:"ADMIN__"`
-	Auth     authjwt.Config  `envPrefix:"AUTH__"`
+	LogLevel slog.Level        `env:"LOG_LEVEL" envDefault:"INFO"`
+	Database postgres.Config   `envPrefix:"DATABASE__"`
+	Valkey   valkey.Config     `envPrefix:"VALKEY__"`
+	Admin    health.Config     `envPrefix:"ADMIN__"`
+	Auth     authjwt.Config    `envPrefix:"AUTH__"`
 	Client   clientcred.Config `envPrefix:"CLIENT__"`
 	Identity identity.Config   `envPrefix:"IDENTITY__"`
+	Events   events.Config     `envPrefix:"EVENTS__"`
 }
 // 1. Load the config.
 if err := config.Load("IDENTITY_", &cfg); err != nil {
@@ -143,8 +146,24 @@ if err != nil {
 }
 publisher := manifest.NewPublisher(identity.NewManifestRegistry(idc), perms)
 
+// Load the event type registration. A service embeds the file with
+// //go:embed event-types.json and checks it in a unit test. The file gives the
+// app and the types of the outbox writer. Make the events client with the
+// scope events:event_type:register. The service client needs the role
+// events:producer.
+reg, err := eventtypes.Load(fstest.MapFS{"event-types.json": {Data: []byte(
+	`{"source":"/demo","app":"demo","eventTypes":[{"type":"demo.ticket.created","description":"A ticket was created.","dataSchema":{"type":"object"}}]}`)}}, "event-types.json")
+if err != nil {
+	log.Fatal(err)
+}
+evc, err := events.New(cfg.Events, tokens, []string{"events:event_type:register"})
+if err != nil {
+	log.Fatal(err)
+}
+typesPublisher := eventtypes.NewPublisher(events.NewEventTypeRegistry(evc), reg)
+
 // 4. Start the admin server. /livez is 200. /readyz is 503.
-state := health.NewState(pgCheck, healthvk.NewChecker(kv.Raw), publisher.Checker())
+state := health.NewState(pgCheck, healthvk.NewChecker(kv.Raw), publisher.Checker(), typesPublisher.Checker())
 admin := health.NewServer(cfg.Admin, state)
 go func() {
 	if err := admin.ListenAndServe(); err != nil {
@@ -191,6 +210,19 @@ go func() {
 		log.Print(err)
 	}
 }()
+// Register the event types in the background. /readyz is 503 until the
+// registration succeeds.
+go func() {
+	if err := typesPublisher.Run(ctx); err != nil {
+		log.Print(err)
+	}
+}()
+// The outbox writer gets its app and its types from the same file.
+writer, err := outboxpg.NewWriter(db.Pool, outbox.Config{App: reg.App, Types: reg.Types()})
+if err != nil {
+	log.Fatal(err)
+}
+_ = writer
 // Start the outbox relay, the stream consumer, and the retention jobs. The
 // relay and the consumer stop when ctx ends.
 relay, err := outbox.NewRelay(outboxpg.NewStore(db.Pool), streamsvk.NewPublisher(kv.Raw, "identity"), outbox.RelayOptions{})
@@ -1568,6 +1600,8 @@ Import path: `github.com/techorionai/constellation-platform-go/auth`
 
 Environment variables: None. See `auth/jwt` for the verifier settings.
 
+`Principal.App` is the app of a service client. `auth/jwt` sets it from the `app` claim only when `principal_type` is `service`. For another principal type, the verifier ignores the claim and `App` is empty. On a service token, a claim that is not a string or does not match `^[a-z][a-z0-9_]{0,31}$` makes the token invalid. `auth/introspect` gives an empty `App`.
+
 The package also holds the port `auth.TokenSource` for calls to other services, with the errors `ErrNoScopes`, `ErrBadTokenResponse`, `ErrTokenUnavailable`, and `*OAuthError`. `auth.BearerTransport(base, src, audience, scopes...)` is a round tripper that adds `Authorization: Bearer <token>` to a clone of each request. It does not change the request of the caller. A token error stops the request and returns the error. The adapter is `auth/clientcred`.
 
 `auth.ByFormat(jwt, apiToken)` returns a `Verifier` that selects the verifier by the format of the token. A token with the prefix `cpat_` goes to `apiToken`. All other tokens go to `jwt`. The function uses string checks only. If `apiToken` is nil, an API token gives `ErrInvalidToken`. If `jwt` is nil, any other token gives `ErrInvalidToken`.
@@ -1717,6 +1751,7 @@ Rules and limits:
 - A token with an unknown `kid` starts one refetch, at most once in `MinRefetchInterval`. Concurrent calls share one fetch. If the rate limit blocks the refetch, `Verify` returns `ErrKeysUnavailable`, and the middleware answers 503 with `Retry-After`. The client can retry. Any caller with an unknown `kid` can start a window of up to `MinRefetchInterval`. A service that rotates keys must publish the new key before it signs tokens with it.
 - The JWKS fetch does not follow redirects. A redirect response is a failed fetch (`http_error`).
 - `Verify` returns when the context of the caller ends, with an error that wraps `ErrKeysUnavailable` and the context error. The shared fetch continues for the other callers.
+- The claim `app` is read only when `principal_type` is `service`. It must be a string that matches `^[a-z][a-z0-9_]{0,31}$`, else the token is invalid. A missing claim gives an empty `Principal.App`. For another principal type, the verifier ignores the claim.
 - The claim `amr` must be an array of strings. A missing claim and an empty array give empty `AuthMethods`. The verifier keeps values that it does not know. Another type gives `ErrInvalidToken`. The claim `auth_time` must be a number in the years 1 to 9999 and not more than `Leeway` in the future. A missing claim gives the zero `AuthTime`. Another value gives `ErrInvalidToken`. A `null` value of `amr` gives `ErrInvalidToken`. If the token has `act`, the verifier sets `AuthMethods` to empty and `AuthTime` to the zero time, because contract `v0.5.0` says that a service rejects `amr` and `auth_time` of a token with `act`.
 - A time claim (`exp`, `nbf`, `iat`) that is not in the years 1 to 9999 gives `ErrInvalidToken`. The verifier reads claims by their exact names. A claim such as `SCOPE` is not the claim `scope`.
 - `Start` is optional. Without it, the cache refreshes only when a token has an unknown `kid`. `Close` ends a running refresh fetch and waits for the loop. A second `Close` does nothing. `Start` after `Close` does nothing. `Verify` after `Close` still uses the cached keys.
@@ -1957,6 +1992,116 @@ Rules and limits:
 - `manifest.Load` reads a JSON file and checks the rules of the identity service: the app key, the app prefix of each permission key, the role permissions that the manifest defines, and no duplicate key. It rejects unknown fields. Call it in a unit test of the service to find a wrong manifest early.
 - The package does not import `net/http` or an adapter.
 
+## clients/events
+
+Purpose: the client of the events service API, and the adapter of `eventtypes.Registry`.
+
+Import path: `github.com/techorionai/constellation-platform-go/clients/events`
+
+Environment variables (nest `events.Config` with `envPrefix:"EVENTS__"`):
+
+| Field | Variable | Default | Rule |
+| ----- | -------- | ------- | ---- |
+| `URL` | `EVENTS__URL` | none | Required. The base URL of the events service. |
+| `Timeout` | `EVENTS__TIMEOUT` | `10s` | More than 0. A value of 0 or less is an error. |
+| `AllowInsecureHTTP` | `EVENTS__ALLOW_INSECURE_HTTP` | `false` | Optional. Allows the scheme `http` for `URL`. Use it only for local Compose and tests. Never set it in production. |
+
+Use:
+
+```go
+c, err := events.New(cfg.Events, tokenSource, []string{"events:event_type:register"})
+registry := events.NewEventTypeRegistry(c)
+```
+
+A producer asks for the scope `events:event_type:register`. Its service client needs the role `events:producer`. A catalog reader asks for the scope `events:catalog:read`.
+
+Errors: `New` returns an error for a missing or wrong `URL`, a `URL` with the scheme `http` when `AllowInsecureHTTP` is `false`, a nil token source, no scopes, a `Timeout` of 0 or less, and a `WithMaxResponseBytes` value out of range. The error names the field and the variable, or the option. `EventTypeRegistry.Register` maps the result:
+
+| Result | Error |
+| ------ | ----- |
+| 200 | `eventtypes.Result` and `nil` |
+| 413 | `*eventtypes.InvalidError` with the code `content_too_large` |
+| 422 | `*eventtypes.InvalidError` with the code and the field errors of the problem, for example `registration_app_mismatch` or `invalid_data_schema` |
+| 401 or 403 | `eventtypes.ErrDenied` |
+| 408, 429, 5xx, network error, `auth.ErrTokenUnavailable` from the token source, `events.ErrResponseTooLarge` | `eventtypes.ErrUnavailable`. With a `Retry-After` value on a 429 or a 503, or with a wait time from the token source, the error is a `*eventtypes.UnavailableError`. `eventtypes.RetryAfter(err)` returns the wait time. |
+| Other 4xx, for example 400, 404, and 409 | `eventtypes.ErrRejected` |
+| OAuth error `invalid_client`, `invalid_scope`, or `unauthorized_client` from the token source | `eventtypes.ErrDenied` |
+| Other | `eventtypes.ErrUnavailable` |
+
+Rules and limits:
+
+- `events.gen.go` is generated by `oapi-codegen` from `api/openapi/Constellation.Events.openapi.yaml`. Do not change it by hand.
+- The caller gives the scopes. The client asks for the audience `events`. The package imports the port `auth.TokenSource`, not the adapter `auth/clientcred`.
+- The client does not follow redirects, because a redirect target must not get the token.
+- The client reads a response body of 1 MiB at most. The option `WithMaxResponseBytes(n)` changes the limit. The range is 1 KiB to 64 MiB, and a value out of range gives an error. A catalog page can be many MiB, so a catalog reader sets a larger limit or a small `pageSize`. A larger body gives the error `events.ErrResponseTooLarge`.
+- The update steps of the generated client are the same as for `clients/identity`. Copy both OpenAPI files of the new tag.
+
+## eventtypes
+
+Purpose: hold the event type registration of a service, check it, and register it with the events service at startup. The result goes to the readiness check.
+
+Import path: `github.com/techorionai/constellation-platform-go/eventtypes`
+
+Environment variables: None.
+
+The registration file is JSON. A service embeds it with `//go:embed event-types.json`:
+
+```json
+{
+  "source": "/helpdesk",
+  "app": "helpdesk",
+  "eventTypes": [{
+    "type": "helpdesk.ticket.created",
+    "description": "A ticket was created.",
+    "dataSchema": {"type": "object", "properties": {"id": {"type": "string"}}}
+  }]
+}
+```
+
+Use:
+
+```go
+reg, err := eventtypes.Load(files, "event-types.json") // files: an embed.FS
+publisher := eventtypes.NewPublisher(events.NewEventTypeRegistry(evc), reg)
+state := health.NewState(publisher.Checker()) // named "event_types"
+go func() { _ = publisher.Run(ctx) }()
+writer, err := outboxpg.NewWriter(db.Pool, outbox.Config{App: reg.App, Types: reg.Types()})
+```
+
+The file is the only source of the app and the types of the outbox writer.
+
+Place in the startup order: load the file and make the publisher before step 4. Give `publisher.Checker()` to `health.NewState` in step 4. Start `publisher.Run(ctx)` in a goroutine in step 6 and do not wait for it. `MarkStarted` does not wait for the events service.
+
+Checks of `Registration.Validate` and `Load`. Each problem names the rule and the JSON Pointer, and one error has all problems:
+
+- `app` matches `^[a-z][a-z0-9_]*$` with a maximum of 32 characters. `source` is `/<app>`.
+- There are 1 to 200 types. Each `type` matches the event type pattern, has a maximum of 128 characters, starts with `<app>.`, and occurs one time.
+- Each `description` has 1 to 1024 characters.
+- Each `dataSchema` is a JSON object of 64 KiB or less. It compiles as JSON Schema draft 2020-12. A `$schema` value other than draft 2020-12 is an error. A `$ref` must start with `#`. A reference to a file, to `http` or `https`, or a relative reference is an error, and the loader reads no URL.
+- The encoded registration has a maximum of 4 MiB (`MaxRegistrationBytes`). `Load` refuses unknown fields and data after the object.
+
+Call `Load` on the embedded file in a unit test of the service. A bad file then fails in CI, not at the start in production.
+
+Errors of `Registry.Register`: `*eventtypes.InvalidError`, `eventtypes.ErrDenied`, `eventtypes.ErrRejected`, and `eventtypes.ErrUnavailable`. `Run` acts on each result:
+
+| Result | Action | Log | Metric `outcome` |
+| ------ | ------ | --- | ---------------- |
+| Success | Stop. The checker reports "ready". | `info` with the app, the `version`, and the `eventTypeCount`. A `warn` if `eventTypeCount` is not the number of types in the file. | `ok` |
+| `*InvalidError` | Stop with no retry, because the registration is wrong. `Run` returns the error. The checker stays "not ready". | `error` with the codes | `invalid` |
+| `ErrRejected` | Stop with no retry. `Run` returns the error. The checker stays "not ready". | `error` with the error text | `rejected` |
+| `ErrDenied` | Retry with backoff. An admin can give the role `events:producer` after the start, and the service becomes ready with no restart. | `error` on each attempt | `denied` |
+| `ErrUnavailable` or another error | Retry with backoff | `warn` on each attempt | `unavailable` |
+| `ctx` ends | Return `ctx.Err()` | none | none |
+
+Rules and limits:
+
+- The backoff is exponential from 1 second to 1 minute, with jitter. `WithBackoff` changes it. The wait is the larger value of the backoff and the `Retry-After` value, with a maximum of 5 minutes.
+- The publisher registers one time at each start. It does not register again.
+- A new instance of a producer is not ready while the events service is not available. Instances that are ready stay ready, because the checker does not call the events service again.
+- No log record and no span attribute has a `dataSchema` or a `description`.
+- Metric `constellation.events.register` (counter, unit `{attempt}`) has the attribute `outcome`.
+- The package does not import `net/http` or an adapter.
+
 ## Admin sample: rotation and a manual retention run
 
 ```go
@@ -2139,7 +2284,7 @@ Rules and limits:
 
 ## resources/test/mock
 
-Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), `transaction.Transactor` (`Transactor`), `secrets.Repository` (`SecretsRepository`), `retention.Purger` (`RetentionPurger`), `retention.Locker` (`RetentionLocker`), `auth.Verifier` (`Verifier`), `auth.TokenSource` (`TokenSource`), `auth.TokenExchanger` (`TokenExchanger`), `auth.ClientAssertion` (`ClientAssertion`), `manifest.Registry` (`ManifestRegistry`), `outbox.Writer` (`OutboxWriter`), `outbox.Inserter` (`OutboxInserter`), `outbox.Store` (`OutboxStore`), `outbox.Publisher` (`OutboxPublisher`), and `streams.Group` (`StreamGroup`).
+Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), `transaction.Transactor` (`Transactor`), `secrets.Repository` (`SecretsRepository`), `retention.Purger` (`RetentionPurger`), `retention.Locker` (`RetentionLocker`), `auth.Verifier` (`Verifier`), `auth.TokenSource` (`TokenSource`), `auth.TokenExchanger` (`TokenExchanger`), `auth.ClientAssertion` (`ClientAssertion`), `manifest.Registry` (`ManifestRegistry`), `eventtypes.Registry` (`EventTypeRegistry`), `outbox.Writer` (`OutboxWriter`), `outbox.Inserter` (`OutboxInserter`), `outbox.Store` (`OutboxStore`), `outbox.Publisher` (`OutboxPublisher`), and `streams.Group` (`StreamGroup`).
 
 Import path: `github.com/techorionai/constellation-platform-go/resources/test/mock`
 

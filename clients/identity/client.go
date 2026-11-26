@@ -3,7 +3,6 @@ package identity
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -14,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/techorionai/constellation-platform-go/auth"
+	"github.com/techorionai/constellation-platform-go/internal/limithttp"
 )
 
 // Audience is the token audience of the identity service.
@@ -37,44 +37,6 @@ const maxResponseBytes = 1 << 20
 
 // ErrResponseTooLarge is the error of a response body above the limit.
 var ErrResponseTooLarge = errors.New("clients/identity: response body is too large")
-
-// limitTransport limits the size of each response body.
-type limitTransport struct{ base http.RoundTripper }
-
-func (t limitTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := t.base.RoundTrip(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.ContentLength > maxResponseBytes {
-		_ = resp.Body.Close()
-		return nil, ErrResponseTooLarge
-	}
-	resp.Body = &limitBody{rc: resp.Body, left: maxResponseBytes}
-	return resp, nil
-}
-
-type limitBody struct {
-	rc   io.ReadCloser
-	left int64
-}
-
-func (b *limitBody) Read(p []byte) (int, error) {
-	if b.left < 0 {
-		return 0, ErrResponseTooLarge
-	}
-	if int64(len(p)) > b.left+1 {
-		p = p[:b.left+1]
-	}
-	n, err := b.rc.Read(p)
-	b.left -= int64(n)
-	if b.left < 0 {
-		return 0, ErrResponseTooLarge
-	}
-	return n, err
-}
-
-func (b *limitBody) Close() error { return b.rc.Close() }
 
 // Option changes the behavior of [New].
 type Option func(*options)
@@ -140,7 +102,7 @@ func New(cfg Config, ts auth.TokenSource, scopes []string, opts ...Option) (*Cli
 	if o.propagators != nil {
 		otelOpts = append(otelOpts, otelhttp.WithPropagators(o.propagators))
 	}
-	rt := limitTransport{base: otelhttp.NewTransport(auth.BearerTransport(o.base, ts, Audience, scopes...), otelOpts...)}
+	rt := limithttp.Transport{Base: otelhttp.NewTransport(auth.BearerTransport(o.base, ts, Audience, scopes...), otelOpts...), Max: maxResponseBytes, Err: ErrResponseTooLarge}
 	httpClient := &http.Client{
 		Transport: rt,
 		Timeout:   cfg.Timeout,
