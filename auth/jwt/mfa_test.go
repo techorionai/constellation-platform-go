@@ -1,6 +1,7 @@
 package jwt_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -39,7 +40,7 @@ func TestU2AmrAbsentEmptyCustom(t *testing.T) {
 // Issue 18 U3
 func TestU3AmrWrongType(t *testing.T) {
 	f := newFixture(t)
-	for _, v := range []any{"pwd", []any{1}, map[string]any{}, []any{nil}, 5} {
+	for _, v := range []any{"pwd", []any{1}, map[string]any{}, []any{nil}, 5, nil} {
 		_, err := f.verify(t, issuer.Claims{Extra: map[string]any{"amr": v}})
 		wantErr(t, err, auth.ErrInvalidToken)
 	}
@@ -60,5 +61,21 @@ func TestU5AuthTimeBad(t *testing.T) {
 	for _, v := range []any{"1700000000", 1e12} {
 		_, err := f.verify(t, issuer.Claims{Extra: map[string]any{"auth_time": v}})
 		wantErr(t, err, auth.ErrInvalidToken)
+	}
+}
+
+// Issue 18 U24
+func TestU24ActClearsMFA(t *testing.T) {
+	f := newFixture(t)
+	at := f.clock.Now().Add(-time.Minute).Unix()
+	p := f.mustVerify(t, issuer.Claims{Extra: map[string]any{
+		"amr": []string{"mfa"}, "auth_time": at,
+		"act": map[string]any{"sub": "a1", "principal_type": "agent"},
+	}})
+	if p.Act == nil || len(p.AuthMethods) != 0 || !p.AuthTime.IsZero() || p.HasMFA() {
+		t.Errorf("principal %+v", p)
+	}
+	if err := auth.CheckMFA(p, 5*time.Minute, f.clock.Now()); !errors.Is(err, auth.ErrReauthenticationRequired) {
+		t.Errorf("err %v", err)
 	}
 }

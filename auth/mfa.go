@@ -38,7 +38,10 @@ func CheckMFA(p Principal, maxAge time.Duration, now time.Time) error {
 func MFAChallenge(maxAge time.Duration) string {
 	v := `Bearer error="insufficient_user_authentication", error_description="A fresh MFA login is necessary"`
 	if maxAge > 0 {
-		secs := (maxAge + time.Second - 1) / time.Second
+		secs := maxAge / time.Second
+		if maxAge%time.Second != 0 {
+			secs++
+		}
 		v += `, max_age="` + strconv.FormatInt(int64(secs), 10) + `"`
 	}
 	return v

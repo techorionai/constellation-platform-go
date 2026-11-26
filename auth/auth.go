@@ -78,12 +78,15 @@ type Principal struct {
 	AuthTime time.Time
 }
 
-// HasMFA returns true if AuthMethods contains "mfa".
+// HasMFA returns true if AuthMethods contains "mfa", Act is nil, and the token
+// type is not [TokenTypeAPI].
 //
-// HasMFA does not check Act and does not check the age of AuthTime. A token
-// with Act does not satisfy MFA. A sensitive action must use [CheckMFA] or
-// [RequireMFA], not HasMFA.
+// HasMFA does not check the age of AuthTime. A sensitive action must use
+// [CheckMFA] or [RequireMFA], not HasMFA.
 func (p Principal) HasMFA() bool {
+	if p.Act != nil || p.TokenType.OrAccess() == TokenTypeAPI {
+		return false
+	}
 	return slices.Contains(p.AuthMethods, "mfa")
 }
 

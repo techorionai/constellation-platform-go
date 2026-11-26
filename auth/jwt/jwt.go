@@ -318,9 +318,9 @@ func parseClaims(payload []byte) (claims, error) {
 	}
 	c.Aud, _ = r.raw("aud")
 	c.AuthTime = r.num("auth_time")
-	if raw, ok := r.raw("amr"); ok {
+	if raw, ok := r.m["amr"]; ok {
 		var items []json.RawMessage
-		if err := json.Unmarshal(raw, &items); err != nil {
+		if string(raw) == "null" || json.Unmarshal(raw, &items) != nil {
 			r.bad = true
 		}
 		for _, it := range items {
@@ -450,6 +450,9 @@ func (v *Verifier) principal(c claims) (auth.Principal, error) {
 			return auth.Principal{}, invalid("act")
 		}
 		p.Act = &auth.Actor{ID: c.Act.Sub, Type: atype}
+		// Contract v0.5.0: a service rejects amr and auth_time of a token with act.
+		p.AuthMethods = nil
+		p.AuthTime = time.Time{}
 	}
 	return p, nil
 }

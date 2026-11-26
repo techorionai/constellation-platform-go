@@ -3,6 +3,7 @@ package auth_test
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -65,6 +66,13 @@ func TestU6RequireMFAPass(t *testing.T) {
 func TestU7RequireMFATooOld(t *testing.T) {
 	rec, ran := mfaRun(t, auth.RequireMFA(5*time.Minute), mfaP(6*time.Minute, "mfa"))
 	wantRefusal(t, rec, ran)
+	wantRefusalBody(t, rec)
+}
+
+// wantRefusalBody checks the header, the content type, and the body of the
+// 401 refusal. The request ID is the ID of the request.
+func wantRefusalBody(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
 	if got := rec.Header().Get("WWW-Authenticate"); got != wantChallenge300 {
 		t.Errorf("header %q", got)
 	}
@@ -72,8 +80,12 @@ func TestU7RequireMFATooOld(t *testing.T) {
 		t.Errorf("content type %q", ct)
 	}
 	p := decode(t, rec)
-	if p.Type != "about:blank" || p.Title != "Reauthentication required" || p.Status != 401 || p.RequestID == "" {
+	id := rec.Header().Get(requestid.Header)
+	if p.Type != "about:blank" || p.Title != "Reauthentication required" || p.Status != 401 || p.Code != "reauthentication_required" {
 		t.Errorf("body %+v", p)
+	}
+	if id == "" || p.RequestID != id {
+		t.Errorf("request id %q, header %q", p.RequestID, id)
 	}
 }
 
@@ -127,7 +139,9 @@ func TestU13APIToken(t *testing.T) {
 	if err := auth.CheckMFA(*p, 5*time.Minute, time.Now()); !errors.Is(err, auth.ErrReauthenticationRequired) {
 		t.Errorf("err %v", err)
 	}
-	rec, ran := mfaRun(t, auth.RequireMFA(5*time.Minute), mfaP(0, "pwd"))
+	rec, ran := mfaRun(t, auth.RequireMFA(5*time.Minute), p)
+	wantRefusal(t, rec, ran)
+	rec, ran = mfaRun(t, auth.RequireMFA(5*time.Minute), mfaP(0, "pwd"))
 	wantRefusal(t, rec, ran)
 }
 
@@ -189,9 +203,7 @@ func TestU18WriteAndPanic(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil))
 	wantRefusal(t, rec, false)
-	if rec.Header().Get("WWW-Authenticate") != wantChallenge300 {
-		t.Errorf("header %q", rec.Header().Get("WWW-Authenticate"))
-	}
+	wantRefusalBody(t, rec)
 	defer func() {
 		if recover() == nil {
 			t.Error("no panic")
@@ -231,8 +243,30 @@ func TestU22MFAPrincipal(t *testing.T) {
 	}
 }
 
-func TestHasMFA(t *testing.T) {
-	if (auth.Principal{AuthMethods: []string{"pwd"}}).HasMFA() || !(auth.Principal{AuthMethods: []string{"pwd", "mfa"}}).HasMFA() {
-		t.Error("HasMFA")
+// Issue 18 U23
+func TestU23HasMFA(t *testing.T) {
+	mfa := []string{"pwd", "mfa"}
+	act := &auth.Actor{ID: "a1", Type: auth.PrincipalAgent}
+	cases := []struct {
+		name string
+		p    auth.Principal
+		want bool
+	}{
+		{"mfa", auth.Principal{AuthMethods: mfa}, true},
+		{"no mfa", auth.Principal{AuthMethods: []string{"pwd"}}, false},
+		{"act", auth.Principal{AuthMethods: mfa, Act: act}, false},
+		{"api token", auth.Principal{AuthMethods: mfa, TokenType: auth.TokenTypeAPI}, false},
+	}
+	for _, c := range cases {
+		if got := c.p.HasMFA(); got != c.want {
+			t.Errorf("%s: got %v", c.name, got)
+		}
+	}
+}
+
+func TestMFAChallengeLargeMaxAge(t *testing.T) {
+	got := auth.MFAChallenge(time.Duration(math.MaxInt64))
+	if !strings.HasSuffix(got, `max_age="9223372037"`) {
+		t.Errorf("challenge %q", got)
 	}
 }
