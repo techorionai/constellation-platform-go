@@ -264,9 +264,9 @@ func TestU19Lost(t *testing.T) {
 func TestU20Span(t *testing.T) {
 	tl := newTelemetry(t)
 	traceparent := "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
-	withTP := `{"type":"identity.user.created","traceparent":"` + traceparent + `"}`
-	noTP := `{"type":"identity.user.created"}`
-	badTP := `{"type":"identity.user.created","traceparent":"00-zz-b7ad6b7169203331-01"}`
+	withTP := `{"source":"/identity","type":"identity.user.created","traceparent":"` + traceparent + `"}`
+	noTP := `{"source":"/identity","type":"identity.user.created"}`
+	badTP := `{"source":"/identity","type":"identity.user.created","traceparent":"00-zz-b7ad6b7169203331-01"}`
 	g := &mock.StreamGroup{ReadFunc: once(
 		streams.Message{ID: "1-0", Event: []byte(withTP), Deliveries: 1},
 		streams.Message{ID: "2-0", Event: []byte(noTP), Deliveries: 2},
@@ -370,4 +370,77 @@ func TestConsumerCleanup(t *testing.T) {
 	c := newConsumer(t, g, func(context.Context, streams.Message) error { return nil },
 		streams.ConsumerOptions{Block: 100 * time.Millisecond, CleanupInterval: time.Nanosecond})
 	runUntil(t, c, func() bool { return g.CleanupCalls() >= 1 })
+}
+
+// U26: a message whose source or type does not match the stream is dropped.
+func TestU26ForgedEvent(t *testing.T) {
+	tl := newTelemetry(t)
+	forgedSource := `{"source":"/other","type":"identity.user.created"}`
+	forgedType := `{"source":"/identity","type":"other.user.created"}`
+	g := &mock.StreamGroup{ReadFunc: once(
+		streams.Message{ID: "1-0", Event: []byte(forgedSource), Deliveries: 1},
+		streams.Message{ID: "2-0", Event: []byte(forgedType), Deliveries: 1},
+		streams.Message{ID: "3-0", Event: []byte(`not json`), Deliveries: 1},
+	)}
+	called := false
+	h := func(context.Context, streams.Message) error { called = true; return nil }
+	c := newConsumer(t, g, h, tl.options(streams.ConsumerOptions{}))
+	runUntil(t, c, func() bool { return len(g.Acked()) == 3 })
+	if called {
+		t.Error("the handler ran for a forged message")
+	}
+	if n := tl.counter(t, "constellation.events.consumer.handled", attribute.String("outcome", "invalid")); n != 3 {
+		t.Errorf("invalid = %d, want 3", n)
+	}
+}
+
+// U27: NeverDrop keeps the message and calls the handler again.
+func TestU27NeverDrop(t *testing.T) {
+	tl := newTelemetry(t)
+	g := &mock.StreamGroup{ReadFunc: once(streams.Message{ID: "1-0", Event: []byte(event), Deliveries: 50})}
+	var mu sync.Mutex
+	calls := 0
+	h := func(context.Context, streams.Message) error {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return errors.New("fail")
+	}
+	c := newConsumer(t, g, h, tl.options(streams.ConsumerOptions{MaxDeliveries: 3, NeverDrop: true}))
+	runUntil(t, c, func() bool { mu.Lock(); defer mu.Unlock(); return calls == 1 })
+	if len(g.Acked()) != 0 {
+		t.Errorf("acked = %v, want none", g.Acked())
+	}
+	if n := tl.counter(t, "constellation.events.consumer.handled", attribute.String("outcome", "dropped")); n != 0 {
+		t.Errorf("dropped = %d, want 0", n)
+	}
+	if !strings.Contains(tl.logs.String(), "stays pending") {
+		t.Errorf("no error log record: %s", tl.logs.String())
+	}
+}
+
+// U28: a message that is larger than MaxMessageBytes is dropped.
+func TestU28LargeMessage(t *testing.T) {
+	tl := newTelemetry(t)
+	big := `{"source":"/identity","type":"identity.user.created","data":"` + strings.Repeat("a", 200) + `"}`
+	g := &mock.StreamGroup{ReadFunc: once(
+		streams.Message{ID: "1-0", Event: []byte(big), Deliveries: 1},
+		streams.Message{ID: "2-0", Event: []byte(event), Deliveries: 1},
+	)}
+	var mu sync.Mutex
+	var got []string
+	h := func(_ context.Context, m streams.Message) error {
+		mu.Lock()
+		got = append(got, m.ID)
+		mu.Unlock()
+		return nil
+	}
+	c := newConsumer(t, g, h, tl.options(streams.ConsumerOptions{MaxMessageBytes: 150}))
+	runUntil(t, c, func() bool { return len(g.Acked()) == 2 })
+	if len(got) != 1 || got[0] != "2-0" {
+		t.Errorf("handled = %v, want [2-0]", got)
+	}
+	if n := tl.counter(t, "constellation.events.consumer.handled", attribute.String("outcome", "invalid")); n != 1 {
+		t.Errorf("invalid = %d, want 1", n)
+	}
 }

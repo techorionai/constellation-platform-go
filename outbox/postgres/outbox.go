@@ -87,6 +87,10 @@ func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
 // Process locks unpublished rows, calls fn, and marks the rows as published in
 // the same transaction. See outbox.Store.
+//
+// The row locks stay while fn runs. A failure after fn returns nil and before
+// the commit, for example a lost connection, rolls back the mark. The next call
+// then publishes the same events again, so a consumer can receive a duplicate.
 func (s *Store) Process(ctx context.Context, limit, maxBytes int, fn func(ctx context.Context, events []outbox.Record) error) (int, bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

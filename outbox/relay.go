@@ -54,6 +54,11 @@ type Store interface {
 	// maxBytes, but the first row always goes to fn. It does not call fn when
 	// there are no rows. n is the count of the published rows. full is true when
 	// the batch was full by count or by bytes.
+	//
+	// Delivery is at least once. The rows stay locked while fn runs. If fn
+	// publishes the events and the commit then fails (for example, the database
+	// connection ends), the rows stay unpublished and the next call publishes
+	// them again. Consumers must handle a duplicate event by its source and id.
 	Process(ctx context.Context, limit, maxBytes int, fn func(ctx context.Context, events []Record) error) (n int, full bool, err error)
 	// Lag returns the age of the oldest unpublished row, or 0.
 	Lag(ctx context.Context) (time.Duration, error)
@@ -276,17 +281,24 @@ func rootErr(err error) error {
 // tick processes one batch.
 func (r *Relay) tick(ctx context.Context) (int, bool, error) {
 	batchLen := 0
+	publishFailed := false
 	n, full, err := r.store.Process(ctx, r.opts.BatchSize, MaxBatchBytes, func(ctx context.Context, recs []Record) error {
 		batchLen = len(recs)
-		return r.publish(ctx, recs)
+		if err := r.publish(ctx, recs); err != nil {
+			publishFailed = true
+			return err
+		}
+		return nil
 	})
 	mctx := context.WithoutCancel(ctx)
 	if err != nil {
-		count := batchLen
-		if count == 0 {
-			count = 1
+		// A publish error counts each event of the batch. A database error
+		// has its own outcome and counts 1.
+		outcome, count := "error", batchLen
+		if !publishFailed {
+			outcome, count = "db_error", 1
 		}
-		r.published.Add(mctx, int64(count), metric.WithAttributes(attribute.String("outcome", "error")))
+		r.published.Add(mctx, int64(count), metric.WithAttributes(attribute.String("outcome", outcome)))
 		return 0, false, err
 	}
 	if n > 0 {

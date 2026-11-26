@@ -384,3 +384,24 @@ func TestU15SpanAndLag(t *testing.T) {
 		}
 	}
 }
+
+// U29: a database error counts as db_error and not as a publish error.
+func TestU29DatabaseError(t *testing.T) {
+	tl := newTelemetry(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &waits{cancel: cancel, stopAfter: 2, immediate: true}
+	store := &mock.OutboxStore{ProcessFunc: func(context.Context, int, int, func(context.Context, []outbox.Record) error) (int, bool, error) {
+		return 0, false, errors.New("database down")
+	}}
+	r := newRelay(t, store, &mock.OutboxPublisher{}, tl.options(outbox.RelayOptions{After: w.after}))
+	if err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := tl.counter(t, "constellation.outbox.published", attribute.String("outcome", "db_error")); n != 2 {
+		t.Errorf("db_error count = %d, want 2", n)
+	}
+	if n := tl.counter(t, "constellation.outbox.published", attribute.String("outcome", "error")); n != 0 {
+		t.Errorf("error count = %d, want 0", n)
+	}
+}

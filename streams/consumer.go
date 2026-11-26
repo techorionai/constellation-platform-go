@@ -27,6 +27,7 @@ const (
 	MaxBlock               = time.Minute
 	DefaultClaimIdle       = 5 * time.Minute
 	MinClaimIdle           = 100 * time.Millisecond
+	DefaultMaxMessageBytes = 256 << 10
 	DefaultMaxDeliveries   = 10
 	MaxMaxDeliveries       = 1000
 	DefaultCleanupInterval = time.Hour
@@ -50,8 +51,19 @@ type ConsumerOptions struct {
 	// Default 5m, 100ms or more.
 	ClaimIdle time.Duration
 	// MaxDeliveries is the number of deliveries after which a message is
-	// dropped. Default 10, from 1 to 1000.
+	// dropped. Default 10, from 1 to 1000. NeverDrop turns the drop off.
 	MaxDeliveries int
+	// NeverDrop keeps a message that failed more than MaxDeliveries times. The
+	// consumer logs an error and calls the handler again at each claim. A
+	// consumer that must not lose events, for example the audit consumer, sets
+	// this option.
+	NeverDrop bool
+	// MaxMessageBytes is the maximum size of the CloudEvent of one message.
+	// The consumer acknowledges and drops a larger message. Default 256 KiB.
+	// One iteration can hold up to 2*Count messages in memory, so the memory
+	// need is about 2*Count*MaxMessageBytes, plus the size of the oversized
+	// messages that the stream returns.
+	MaxMessageBytes int
 	// CleanupInterval is the time between two cleanups of old consumers.
 	// Default 1h.
 	CleanupInterval time.Duration
@@ -82,6 +94,9 @@ func (o ConsumerOptions) resolve() (ConsumerOptions, error) {
 	if o.MaxDeliveries == 0 {
 		o.MaxDeliveries = DefaultMaxDeliveries
 	}
+	if o.MaxMessageBytes == 0 {
+		o.MaxMessageBytes = DefaultMaxMessageBytes
+	}
 	if o.CleanupInterval == 0 {
 		o.CleanupInterval = DefaultCleanupInterval
 	}
@@ -97,6 +112,8 @@ func (o ConsumerOptions) resolve() (ConsumerOptions, error) {
 		return o, fmt.Errorf("%w: ClaimIdle must be %s or more", ErrInvalidConfig, MinClaimIdle)
 	case o.MaxDeliveries < 1 || o.MaxDeliveries > MaxMaxDeliveries:
 		return o, fmt.Errorf("%w: MaxDeliveries must be from 1 to %d", ErrInvalidConfig, MaxMaxDeliveries)
+	case o.MaxMessageBytes < 0:
+		return o, fmt.Errorf("%w: MaxMessageBytes must not be negative", ErrInvalidConfig)
 	case o.CleanupInterval < 0:
 		return o, fmt.Errorf("%w: CleanupInterval must not be negative", ErrInvalidConfig)
 	case o.CleanupIdle < 0:
@@ -262,13 +279,16 @@ func (c *Consumer) handleAll(ctx context.Context, msgs []Message) {
 
 // header is the part of the CloudEvent that the consumer reads.
 type header struct {
+	Source      string `json:"source"`
 	Type        string `json:"type"`
 	Traceparent string `json:"traceparent"`
 }
 
 func (c *Consumer) handleOne(ctx context.Context, m Message) {
 	var h header
-	_ = json.Unmarshal(m.Event, &h)
+	if len(m.Event) <= c.opts.MaxMessageBytes {
+		_ = json.Unmarshal(m.Event, &h)
+	}
 
 	opts := []trace.SpanStartOption{
 		trace.WithNewRoot(),
@@ -293,13 +313,38 @@ func (c *Consumer) handleOne(ctx context.Context, m Message) {
 			metric.WithAttributes(append(c.attrs(), attribute.String("outcome", outcome))...))
 	}()
 
-	if m.Deliveries > int64(c.opts.MaxDeliveries) {
-		outcome = "dropped"
-		c.opts.Logger.ErrorContext(hctx, "streams: dropped a message after too many deliveries",
+	if len(m.Event) > c.opts.MaxMessageBytes {
+		outcome = "invalid"
+		c.opts.Logger.ErrorContext(hctx, "streams: dropped a message that is too large",
 			slog.String("stream", c.group.Stream()), slog.String("group", c.group.Name()),
-			slog.String("id", m.ID), slog.String("type", h.Type), slog.Int64("deliveries", m.Deliveries))
+			slog.String("id", m.ID), slog.Int("bytes", len(m.Event)), slog.Int("max", c.opts.MaxMessageBytes))
 		c.ack(hctx, ctx, m.ID)
 		return
+	}
+	// A service can write only to its own stream. The source and the type must
+	// agree with the stream, so that a service cannot forge the events of
+	// another app.
+	if app := c.group.Stream(); h.Source != "/"+app || !strings.HasPrefix(h.Type, app+".") {
+		outcome = "invalid"
+		c.opts.Logger.ErrorContext(hctx, "streams: dropped a message whose source or type does not match the stream",
+			slog.String("stream", app), slog.String("group", c.group.Name()),
+			slog.String("id", m.ID), slog.String("source", h.Source), slog.String("type", h.Type))
+		c.ack(hctx, ctx, m.ID)
+		return
+	}
+	if m.Deliveries > int64(c.opts.MaxDeliveries) {
+		if c.opts.NeverDrop {
+			c.opts.Logger.ErrorContext(hctx, "streams: a message has too many deliveries and stays pending",
+				slog.String("stream", c.group.Stream()), slog.String("group", c.group.Name()),
+				slog.String("id", m.ID), slog.String("type", h.Type), slog.Int64("deliveries", m.Deliveries))
+		} else {
+			outcome = "dropped"
+			c.opts.Logger.ErrorContext(hctx, "streams: dropped a message after too many deliveries",
+				slog.String("stream", c.group.Stream()), slog.String("group", c.group.Name()),
+				slog.String("id", m.ID), slog.String("type", h.Type), slog.Int64("deliveries", m.Deliveries))
+			c.ack(hctx, ctx, m.ID)
+			return
+		}
 	}
 	if err := c.handler(hctx, m); err != nil {
 		outcome = "error"

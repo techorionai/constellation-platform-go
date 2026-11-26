@@ -22,11 +22,14 @@ import (
 	streamsvalkey "github.com/techorionai/constellation-platform-go/streams/valkey"
 )
 
-const sampleEvent = `{"specversion":"1.0","id":"1","source":"/identity","type":"identity.user.created","data":{}}`
+// sampleEvent returns a CloudEvent that agrees with the stream of app.
+func sampleEvent(app string) string {
+	return `{"specversion":"1.0","id":"1","source":"/` + app + `","type":"` + app + `.user.created","data":{}}`
+}
 
 func xadd(t *testing.T, c valkeygo.Client, app, id string) {
 	t.Helper()
-	if err := c.Do(t.Context(), c.B().Xadd().Key(streams.StreamKey(app)).Id(id).FieldValue().FieldValue("event", sampleEvent).Build()).Error(); err != nil {
+	if err := c.Do(t.Context(), c.B().Xadd().Key(streams.StreamKey(app)).Id(id).FieldValue().FieldValue("event", sampleEvent(app)).Build()).Error(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -123,7 +126,7 @@ func TestIntegration(t *testing.T) {
 		ids := make([]string, len(msgs))
 		for i, m := range msgs {
 			ids[i] = m.ID
-			if m.Deliveries != 1 || string(m.Event) != sampleEvent {
+			if m.Deliveries != 1 || string(m.Event) != sampleEvent("i8") {
 				t.Errorf("message %d = %+v", i, m)
 			}
 		}
@@ -383,7 +386,7 @@ func TestIntegration(t *testing.T) {
 		cmds := make(valkeygo.Commands, 0, 1000)
 		for i := range 1000 {
 			cmds = append(cmds, admin.B().Xadd().Key(streams.StreamKey("i17")).Id(fmt.Sprintf("%d-0", now-100000+int64(i))).
-				FieldValue().FieldValue("event", sampleEvent).Build())
+				FieldValue().FieldValue("event", sampleEvent("i17")).Build())
 		}
 		for _, r := range admin.DoMulti(ctx, cmds...) {
 			if err := r.Error(); err != nil {

@@ -244,10 +244,29 @@ func (w *EventWriter) build(e *Event, traceparent string) (Row, error) {
 	if err != nil {
 		return Row{}, fmt.Errorf("%w: %w", ErrInvalidData, err)
 	}
+	if hasEscapedNUL(payload) {
+		return Row{}, fmt.Errorf("%w: a value has the character U+0000", ErrInvalidData)
+	}
 	if len(payload) > maxEventBytes {
 		return Row{}, fmt.Errorf("%w: %d bytes", ErrEventTooLarge, len(payload))
 	}
 	return Row{EventID: ce.ID, Type: e.Type, Payload: payload}, nil
+}
+
+// hasEscapedNUL reports whether the JSON text has the escape \u0000 in a
+// string. The jsonb column of PostgreSQL rejects this escape. An escaped
+// backslash that is followed by the text u0000 does not count.
+func hasEscapedNUL(b []byte) bool {
+	for i := 0; i < len(b); i++ {
+		if b[i] != '\\' {
+			continue
+		}
+		if i+5 < len(b) && b[i+1] == 'u' && string(b[i+2:i+6]) == "0000" {
+			return true
+		}
+		i++
+	}
+	return false
 }
 
 func checkActor(a Actor) error {

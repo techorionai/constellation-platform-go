@@ -1380,7 +1380,7 @@ The samples are `ExampleEventWriter_Write` and `ExampleServiceActor` in `outbox/
 | 2 | `Type` matches the EventType pattern of the contract and is in `Config.Types`. | `ErrUnknownEventType` |
 | 3 | `Actor.ID` has 1 to 128 characters. `Actor.Type` is a principal type. `Act` and `ActType` are set together. `Act` has 1 to 128 characters. | `ErrInvalidActor` |
 | 4 | `Subject` has a maximum of 256 characters. | `ErrInvalidSubject` |
-| 5 | `Data` marshals to a JSON object. The CloudEvent in JSON has a maximum of 256 KiB. | `ErrInvalidData`, `ErrEventTooLarge` |
+| 5 | `Data` marshals to a JSON object. The CloudEvent in JSON has a maximum of 256 KiB. No string has the character U+0000, because the `jsonb` column rejects it. | `ErrInvalidData`, `ErrEventTooLarge` |
 
 The writer sets `specversion` `1.0`, `id` (a UUIDv7), `source` `/<app>`, `type`, `time` (UTC), `datacontenttype`, `data`, the actor attributes, and `traceparent` from the span in the context.
 
@@ -1403,7 +1403,7 @@ The writer sets `specversion` `1.0`, `id` (a UUIDv7), `source` `/<app>`, `type`,
 - A full batch (by count or by bytes) starts the next tick with no wait.
 - After an error, the relay waits from 1 s to 1 min with jitter. `Notify` does not cut this wait. The log record has the error type and not the event data.
 - More than one instance can run the relay. A crash after the publish and before the commit publishes the rows again. Delivery is at least once. The order of events is not guaranteed.
-- Metrics: `constellation.outbox.published` (counter, `{event}`, attribute `outcome` = `ok` or `error`) and `constellation.outbox.lag` (gauge, `s`, the age of the oldest unpublished row, 0 when there is none). Each instance reports the same lag. An alert uses `max`. The gauge callback has a time limit of 5 s. On an error, it logs at `warn` level and reports no value.
+- Metrics: `constellation.outbox.published` (counter, `{event}`, attribute `outcome` = `ok`, `error` for a publish error, or `db_error` for a database error) and `constellation.outbox.lag` (gauge, `s`, the age of the oldest unpublished row, 0 when there is none). Each instance reports the same lag. An alert uses `max`. The gauge callback has a time limit of 5 s. On an error, it logs at `warn` level and reports no value.
 - Span `outbox.relay.publish` for each batch with 1 or more events. Attributes: `constellation.outbox.events` and `outcome`.
 
 ## outbox/postgres
@@ -1475,15 +1475,18 @@ The samples are `ExampleStreamKey` and `ExampleGroupName` in `streams/example_te
 | `Block` | `5s` | `100ms` to `1m`. |
 | `ClaimIdle` | `5m` | `100ms` or more. A pending message that is idle longer can be claimed. |
 | `MaxDeliveries` | 10 | 1 to 1000. |
+| `NeverDrop` | `false` | If `true`, a message with more than `MaxDeliveries` deliveries is not dropped. Use it for a consumer that must not lose events, for example the audit consumer. |
+| `MaxMessageBytes` | 256 KiB | The maximum size of one CloudEvent. A larger message is dropped. One loop holds up to 2 x `Count` messages, so the memory need is about 2 x `Count` x `MaxMessageBytes`. |
 | `CleanupInterval` | `1h` | The time between two cleanups of old consumers. |
 | `CleanupIdle` | `24h` | The idle time after which a consumer with no pending messages is deleted. |
 
 - Each loop first claims stale messages, then reads new messages. A handler that returns `nil` acknowledges the message. An error leaves the message pending, and a later claim delivers it again. Delivery is at least once with no order. A handler must be idempotent by `source` and `id`.
-- A message with more than `MaxDeliveries` deliveries is logged at `error` level, counted with `outcome=dropped`, and acknowledged. The handler does not run. There is no dead letter stream.
+- A message with more than `MaxDeliveries` deliveries is logged at `error` level, counted with `outcome=dropped`, and acknowledged. The handler does not run. There is no dead letter stream. With `NeverDrop`, the consumer logs the same record, keeps the message pending, and calls the handler again at each claim.
+- A message is dropped with `outcome=invalid` and an `error` log record if its `source` is not `/<stream app>`, if its `type` does not start with `<stream app>.`, or if it is larger than `MaxMessageBytes`. A service can write with a raw `XADD` to its own stream only, so this check stops a forged event.
 - A pending message that the trim deleted is logged at `warn` level and counted as lost.
 - Each start adds a new consumer name. At the end of `Run`, the consumer deletes its own entry if it has no pending messages. Each `CleanupInterval`, it deletes the consumers of its group with no pending messages and an idle time of more than `CleanupIdle`.
 - A handler that writes a new event uses `outbox.ServiceActor`. It does not copy `actor` from the received event.
-- Span `events.consume` for each message. The span kind is consumer. It starts a new trace and has a link to the context of the `traceparent` of the event (if it is valid). It is not a child of that context. The handler gets the context of this span. Attributes: `constellation.events.stream`, `constellation.events.group`, `constellation.events.type`, `constellation.events.deliveries`, and `outcome` (`ok`, `error`, `dropped`).
+- Span `events.consume` for each message. The span kind is consumer. It starts a new trace and has a link to the context of the `traceparent` of the event (if it is valid). It is not a child of that context. The handler gets the context of this span. Attributes: `constellation.events.stream`, `constellation.events.group`, `constellation.events.type`, `constellation.events.deliveries`, and `outcome` (`ok`, `error`, `dropped`, `invalid`).
 - Metrics: `constellation.events.consumer.handled` (counter, `{message}`, attributes `stream`, `group`, `outcome`) and `constellation.events.consumer.lost` (counter, `{message}`, attributes `stream`, `group`).
 - The logs and the spans never have the `data` of an event.
 
@@ -1502,7 +1505,7 @@ Environment variables: None. The functions take the raw valkey-go client (`kv.Ra
 | `Lag(ctx, c, app, group)` | The age of the oldest message that the group did not acknowledge. 0 if there is none. `ErrNoGroup` if the group does not exist. |
 | `Groups(ctx, c, app)` | The sorted group names of the stream. An empty list if the stream does not exist. |
 | `NewTrimPurger(c, app)` | Implements `retention.Purger`. `XTRIM events.stream:<app> MINID <ms>-0`. |
-| `ACLSelectors(app)` | The text of the two ACL selectors. |
+| `ACLSelectors(app)` | The text of the two ACL selectors. It panics if `app` does not match the app name pattern. `NewPublisher` and `NewTrimPurger` also panic for an invalid `app`. |
 
 - `Claim` sends `XAUTOCLAIM` and keeps the returned cursor between calls. The cursor starts again at `0-0` when the scan ends. Then it reads the delivery count of each claimed message with `XPENDING`.
 - `TrimPurger` uses the exact form of `XTRIM` and deletes all entries that are older than the period in one call. It does not use `PurgeParams.Limit`. It also deletes entries that a group still has pending. The consumer counts them as lost. The default period is 3 days. Name the job `event_stream`.

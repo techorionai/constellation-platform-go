@@ -31,12 +31,20 @@ var (
 // StreamKey returns the key of the stream of an app.
 func StreamKey(app string) string { return KeyPrefix + app }
 
+// ValidApp checks that app matches ^[a-z][a-z0-9_]{0,31}$.
+func ValidApp(app string) error {
+	if !appPattern.MatchString(app) {
+		return fmt.Errorf("%w: the app must match %s", ErrInvalidGroup, appPattern)
+	}
+	return nil
+}
+
 // GroupName returns the name of a consumer group of an app: app for an empty
 // name, or app.name. app must match ^[a-z][a-z0-9_]{0,31}$. name must match
 // ^[a-z][a-z0-9_]{0,31}$.
 func GroupName(app, name string) (string, error) {
-	if !appPattern.MatchString(app) {
-		return "", fmt.Errorf("%w: the app must match %s", ErrInvalidGroup, appPattern)
+	if err := ValidApp(app); err != nil {
+		return "", err
 	}
 	if name == "" {
 		return app, nil

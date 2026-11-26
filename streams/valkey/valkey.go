@@ -29,10 +29,22 @@ const eventField = "event"
 // service write and trim its own stream. The second selector lets it consume
 // all streams. The ACL cannot isolate the consumer groups of different
 // services. See docs/usage.md.
+//
+// ACLSelectors panics if app does not match the app name pattern of
+// [streams.GroupName], because an app with a space or ")" would add ACL rules.
 func ACLSelectors(app string) string {
+	mustApp(app)
 	return "(~" + streams.StreamKey(app) + " +xadd +xtrim) " +
 		"(~" + streams.KeyPrefix + "* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream " +
 		"+xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange)"
+}
+
+// mustApp panics if app is not a valid app name. The value comes from the
+// configuration of the service and goes into ACL text and key names.
+func mustApp(app string) {
+	if err := streams.ValidApp(app); err != nil {
+		panic(err)
+	}
 }
 
 func isNoKey(err error) bool {
@@ -54,8 +66,9 @@ type Publisher struct {
 
 // NewPublisher returns a publisher for events.stream:<app>. It sets no MAXLEN,
 // because the retention job trims the stream. The service user needs the ACL
-// selectors of [ACLSelectors].
+// selectors of [ACLSelectors]. It panics if app is not a valid app name.
 func NewPublisher(c valkeygo.Client, app string) *Publisher {
+	mustApp(app)
 	return &Publisher{c: c, key: streams.StreamKey(app)}
 }
 
@@ -157,7 +170,7 @@ func (g *Group) Ensure(ctx context.Context) error {
 	return nil
 }
 
-// recover creates the group again after a NOGROUP error.
+// recoverGroup creates the group again after a NOGROUP error.
 func (g *Group) recoverGroup(ctx context.Context, err error) error {
 	if isErrPrefix(err, "NOGROUP") {
 		_ = g.Ensure(ctx)
@@ -309,8 +322,8 @@ func (g *Group) Leave(ctx context.Context) error {
 	return nil
 }
 
-// groupInfo returns the fields of one group from XINFO GROUPS, or the names of
-// all groups when name is empty.
+// groupInfos returns the fields of all groups of the stream of app from
+// XINFO GROUPS.
 func groupInfos(ctx context.Context, c valkeygo.Client, app string) ([]map[string]valkeygo.ValkeyMessage, error) {
 	res := c.Do(ctx, c.B().Arbitrary("XINFO", "GROUPS").Keys(streams.StreamKey(app)).Build())
 	arr, err := res.ToArray()
@@ -420,8 +433,10 @@ type TrimPurger struct {
 
 var _ retention.Purger = (*TrimPurger)(nil)
 
-// NewTrimPurger returns a purger for events.stream:<app>.
+// NewTrimPurger returns a purger for events.stream:<app>. It panics if app is
+// not a valid app name.
 func NewTrimPurger(c valkeygo.Client, app string) *TrimPurger {
+	mustApp(app)
 	return &TrimPurger{c: c, key: streams.StreamKey(app)}
 }
 

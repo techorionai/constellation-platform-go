@@ -241,3 +241,28 @@ func TestU9Config(t *testing.T) {
 		}
 	}
 }
+
+// U24: a U+0000 character in the data or in the subject is an invalid event.
+// A backslash followed by the text u0000 is valid.
+func TestU24NULCharacter(t *testing.T) {
+	ctx := context.Background()
+	e := validEvent()
+	e.Data = map[string]any{"title": "a\x00b"}
+	ins := &mock.OutboxInserter{}
+	if err := newWriter(t, ins).Write(ctx, e); !errors.Is(err, outbox.ErrInvalidData) {
+		t.Fatalf("data: err = %v, want ErrInvalidData", err)
+	}
+	e = validEvent()
+	e.Subject = "a\x00b"
+	if err := newWriter(t, ins).Write(ctx, e); !errors.Is(err, outbox.ErrInvalidData) {
+		t.Fatalf("subject: err = %v, want ErrInvalidData", err)
+	}
+	if len(ins.Rows()) != 0 {
+		t.Fatal("a row was written")
+	}
+	e = validEvent()
+	e.Data = map[string]any{"title": `a\u0000b`}
+	if err := newWriter(t, ins).Write(ctx, e); err != nil {
+		t.Fatalf("escaped text: %v", err)
+	}
+}
