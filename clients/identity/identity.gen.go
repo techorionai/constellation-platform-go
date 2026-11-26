@@ -833,6 +833,21 @@ type JsonWebKeySet struct {
 	Keys []JsonWebKey `json:"keys"`
 }
 
+// MfaStatus The MFA state of a user. A client ignores a field that it does not know.
+type MfaStatus struct {
+	// Enabled The user has one or more second factors.
+	Enabled bool `json:"enabled"`
+
+	// RecoveryCodesRemaining The number of recovery codes that are not used.
+	RecoveryCodesRemaining int32 `json:"recoveryCodesRemaining"`
+
+	// Required The policy requires MFA for this user, for example an admin.
+	Required bool `json:"required"`
+
+	// Totp Present when TOTP is set up. Absent when TOTP is not set up.
+	Totp *TotpStatus `json:"totp,omitempty"`
+}
+
 // NotFound The resource does not exist.
 type NotFound = Problem
 
@@ -961,6 +976,12 @@ type PublishedManifestPage struct {
 	// NextPageToken Token for the next page. No value means that this is the last page.
 	NextPageToken *string `json:"nextPageToken,omitempty"`
 }
+
+// ReauthenticationRequired The token does not show a fresh MFA login (RFC 9470). The code is `reauthentication_required`.
+// The client must start a new authorization request with `max_age`. A token refresh does not help.
+// The header `WWW-Authenticate` is optional in this model, because the 401 response of an operation also covers `Unauthorized`.
+// An operation that uses this model always sends the header with the code `reauthentication_required`.
+type ReauthenticationRequired = Problem
 
 // RequestScopeString Space-separated scope values in a token request or an authorize request.
 // Each value is a permission key or one of `openid`, `profile`, `email`, and `offline_access`.
@@ -1152,7 +1173,7 @@ type TokenResponse struct {
 	// ExpiresIn Lifetime of the access token in seconds.
 	ExpiresIn int32 `json:"expires_in"`
 
-	// IdToken ID token. Present if the request had the scope `openid`.
+	// IdToken ID token. Present if the request had the scope `openid`. Its claims are the model `IdTokenClaims`.
 	IdToken *string `json:"id_token,omitempty"`
 
 	// IssuedTokenType Type of the issued token. The identity service sets it for token exchange.
@@ -1195,6 +1216,15 @@ type TokenTypeHint1 = string
 
 // TooManyRequests The client sent too many requests.
 type TooManyRequests = Problem
+
+// TotpStatus The TOTP factor of a user.
+type TotpStatus struct {
+	// CreatedAt The time of the TOTP setup.
+	CreatedAt time.Time `json:"createdAt"`
+
+	// LastUsedAt The time of the last accepted TOTP code. Absent when no code was used.
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+}
 
 // Unauthorized The request has no valid credentials.
 type Unauthorized = Problem
@@ -1352,6 +1382,11 @@ type MeApiTokensListParams struct {
 	PageSize *CursorPageParamsPageSize `form:"pageSize,omitempty" json:"pageSize,omitempty"`
 }
 
+// MeTotpRemove401ApplicationProblemPlusJSONResponseBody defines parameters for MeTotpRemove.
+type MeTotpRemove401ApplicationProblemPlusJSONResponseBody struct {
+	union json.RawMessage
+}
+
 // PermissionManifestsListParams defines parameters for PermissionManifestsList.
 type PermissionManifestsListParams struct {
 	// PageToken Opaque token from `nextPageToken` of the previous page.
@@ -1388,6 +1423,11 @@ type UserApiTokensListParams struct {
 
 	// PageSize Maximum number of items in the page.
 	PageSize *CursorPageParamsPageSize `form:"pageSize,omitempty" json:"pageSize,omitempty"`
+}
+
+// UserMfaReset401ApplicationProblemPlusJSONResponseBody defines parameters for UserMfaReset.
+type UserMfaReset401ApplicationProblemPlusJSONResponseBody struct {
+	union json.RawMessage
 }
 
 // UserRolesListParams defines parameters for UserRolesList.
@@ -2243,6 +2283,130 @@ func (t *TokenTypeHint) UnmarshalJSON(b []byte) error {
 	return err
 }
 
+// AsReauthenticationRequired returns the union data inside the MeTotpRemove401ApplicationProblemPlusJSONResponseBody as a ReauthenticationRequired
+func (t MeTotpRemove401ApplicationProblemPlusJSONResponseBody) AsReauthenticationRequired() (ReauthenticationRequired, error) {
+	var body ReauthenticationRequired
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromReauthenticationRequired overwrites any union data inside the MeTotpRemove401ApplicationProblemPlusJSONResponseBody as the provided ReauthenticationRequired
+func (t *MeTotpRemove401ApplicationProblemPlusJSONResponseBody) FromReauthenticationRequired(v ReauthenticationRequired) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeReauthenticationRequired performs a merge with any union data inside the MeTotpRemove401ApplicationProblemPlusJSONResponseBody, using the provided ReauthenticationRequired
+func (t *MeTotpRemove401ApplicationProblemPlusJSONResponseBody) MergeReauthenticationRequired(v ReauthenticationRequired) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsUnauthorized returns the union data inside the MeTotpRemove401ApplicationProblemPlusJSONResponseBody as a Unauthorized
+func (t MeTotpRemove401ApplicationProblemPlusJSONResponseBody) AsUnauthorized() (Unauthorized, error) {
+	var body Unauthorized
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromUnauthorized overwrites any union data inside the MeTotpRemove401ApplicationProblemPlusJSONResponseBody as the provided Unauthorized
+func (t *MeTotpRemove401ApplicationProblemPlusJSONResponseBody) FromUnauthorized(v Unauthorized) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeUnauthorized performs a merge with any union data inside the MeTotpRemove401ApplicationProblemPlusJSONResponseBody, using the provided Unauthorized
+func (t *MeTotpRemove401ApplicationProblemPlusJSONResponseBody) MergeUnauthorized(v Unauthorized) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t MeTotpRemove401ApplicationProblemPlusJSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *MeTotpRemove401ApplicationProblemPlusJSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsReauthenticationRequired returns the union data inside the UserMfaReset401ApplicationProblemPlusJSONResponseBody as a ReauthenticationRequired
+func (t UserMfaReset401ApplicationProblemPlusJSONResponseBody) AsReauthenticationRequired() (ReauthenticationRequired, error) {
+	var body ReauthenticationRequired
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromReauthenticationRequired overwrites any union data inside the UserMfaReset401ApplicationProblemPlusJSONResponseBody as the provided ReauthenticationRequired
+func (t *UserMfaReset401ApplicationProblemPlusJSONResponseBody) FromReauthenticationRequired(v ReauthenticationRequired) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeReauthenticationRequired performs a merge with any union data inside the UserMfaReset401ApplicationProblemPlusJSONResponseBody, using the provided ReauthenticationRequired
+func (t *UserMfaReset401ApplicationProblemPlusJSONResponseBody) MergeReauthenticationRequired(v ReauthenticationRequired) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsUnauthorized returns the union data inside the UserMfaReset401ApplicationProblemPlusJSONResponseBody as a Unauthorized
+func (t UserMfaReset401ApplicationProblemPlusJSONResponseBody) AsUnauthorized() (Unauthorized, error) {
+	var body Unauthorized
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromUnauthorized overwrites any union data inside the UserMfaReset401ApplicationProblemPlusJSONResponseBody as the provided Unauthorized
+func (t *UserMfaReset401ApplicationProblemPlusJSONResponseBody) FromUnauthorized(v Unauthorized) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeUnauthorized performs a merge with any union data inside the UserMfaReset401ApplicationProblemPlusJSONResponseBody, using the provided Unauthorized
+func (t *UserMfaReset401ApplicationProblemPlusJSONResponseBody) MergeUnauthorized(v Unauthorized) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t UserMfaReset401ApplicationProblemPlusJSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *UserMfaReset401ApplicationProblemPlusJSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
 // RequestEditorFn is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
 
@@ -2653,6 +2817,28 @@ type ClientInterface interface {
 	// Revoke of a revoked token gives 204. Error code of `Forbidden`: `user_token_required`.
 	MeApiTokensRevoke(ctx context.Context, tokenId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// MeMfaGet performs a GET /v1/me/mfa (the `MeMfaGet` operationId) request.
+	//
+	// Read the MFA state of the user. Error code of `Forbidden`: `user_token_required`.
+	MeMfaGet(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// MeTotpRemove performs a DELETE /v1/me/totp (the `MeTotpRemove` operationId) request.
+	//
+	// Remove the TOTP factor and all recovery codes of the user.
+	// The token needs a fresh MFA login: `amr` contains `mfa` and `auth_time` is at most 5 minutes old.
+	// Else the response is 401 with the code `reauthentication_required` and the header
+	// `WWW-Authenticate: Bearer error="insufficient_user_authentication", error_description="A fresh MFA login is necessary", max_age="300"`.
+	// A token with no `amr` (service, agent, exchange, or API token) gets the same response.
+	// A token with `act` does not satisfy MFA.
+	// The operation writes an audit entry with the action `identity:mfa:totp_remove`, the target user, and the result.
+	// It sends a security notice to the user.
+	// Error code of `Forbidden`: `user_token_required`.
+	// Error code of `NotFound`: `totp_not_found`.
+	// Error code of `Conflict`: `mfa_required`. The policy requires MFA for the user and TOTP is the last second factor.
+	// The order of the checks: the token (401), the scopes (403), `user_token_required` (403),
+	// `reauthentication_required` (401), `totp_not_found` (404), `mfa_required` (409).
+	MeTotpRemove(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// PermissionManifestsList performs a GET /v1/permission-manifests (the `PermissionManifestsList` operationId) request.
 	//
 	// List the stored manifests.
@@ -2746,6 +2932,31 @@ type ClientInterface interface {
 	// Error codes of `Conflict`: `user_not_invited` (the user is `active`)
 	// and `user_disabled` (the user is `disabled`, and this code wins over `user_not_invited`).
 	InvitesCreate(ctx context.Context, userId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UserMfaReset performs a DELETE /v1/users/{userId}/mfa (the `UserMfaReset` operationId) request.
+	//
+	// Reset the MFA of a user. The operation removes all second factors and recovery codes of the user.
+	// It revokes all sessions and refresh tokens of the user. It does not remove the password or the API tokens.
+	// A user with no second factor also gives 204, and the sessions are also revoked.
+	// The token needs a fresh MFA login: `amr` contains `mfa` and `auth_time` is at most 5 minutes old.
+	// Else the response is 401 with the code `reauthentication_required` and the header
+	// `WWW-Authenticate: Bearer error="insufficient_user_authentication", error_description="A fresh MFA login is necessary", max_age="300"`.
+	// A token with no `amr` (service, agent, exchange, or API token) gets the same response.
+	// A token with `act` does not satisfy MFA.
+	// Error code of `NotFound`: `user_not_found`.
+	// Error code of `Conflict`: `mfa_required`. The `userId` is the `sub` of the token.
+	// An administrator cannot reset the own MFA with this operation. The check goes around the rule of `MeTotp_remove`.
+	// The administrator uses the subcommand `identity reset-mfa <email>` of the identity service for this recovery.
+	// The operation writes an audit entry with the action `identity:mfa:reset`, the target user, and the result.
+	// It sends a security notice to the user.
+	// The order of the checks: the token (401), the scopes (403), `reauthentication_required` (401),
+	// `user_not_found` (404), `mfa_required` (409).
+	UserMfaReset(ctx context.Context, userId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UserMfaGet performs a GET /v1/users/{userId}/mfa (the `UserMfaGet` operationId) request.
+	//
+	// Read the MFA state of a user. The permission is `identity:mfa:read`, not `identity:user:read`. Error code of `NotFound`: `user_not_found`.
+	UserMfaGet(ctx context.Context, userId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// UserRolesList performs a GET /v1/users/{userId}/roles (the `UserRolesList` operationId) request.
 	//
@@ -3491,6 +3702,48 @@ func (c *APIClient) MeApiTokensRevoke(ctx context.Context, tokenId string, reqEd
 	return c.Client.Do(req)
 }
 
+// MeMfaGet performs a GET /v1/me/mfa (the `MeMfaGet` operationId) request.
+//
+// Read the MFA state of the user. Error code of `Forbidden`: `user_token_required`.
+func (c *APIClient) MeMfaGet(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewMeMfaGetRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// MeTotpRemove performs a DELETE /v1/me/totp (the `MeTotpRemove` operationId) request.
+//
+// Remove the TOTP factor and all recovery codes of the user.
+// The token needs a fresh MFA login: `amr` contains `mfa` and `auth_time` is at most 5 minutes old.
+// Else the response is 401 with the code `reauthentication_required` and the header
+// `WWW-Authenticate: Bearer error="insufficient_user_authentication", error_description="A fresh MFA login is necessary", max_age="300"`.
+// A token with no `amr` (service, agent, exchange, or API token) gets the same response.
+// A token with `act` does not satisfy MFA.
+// The operation writes an audit entry with the action `identity:mfa:totp_remove`, the target user, and the result.
+// It sends a security notice to the user.
+// Error code of `Forbidden`: `user_token_required`.
+// Error code of `NotFound`: `totp_not_found`.
+// Error code of `Conflict`: `mfa_required`. The policy requires MFA for the user and TOTP is the last second factor.
+// The order of the checks: the token (401), the scopes (403), `user_token_required` (403),
+// `reauthentication_required` (401), `totp_not_found` (404), `mfa_required` (409).
+func (c *APIClient) MeTotpRemove(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewMeTotpRemoveRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // PermissionManifestsList performs a GET /v1/permission-manifests (the `PermissionManifestsList` operationId) request.
 //
 // List the stored manifests.
@@ -3725,6 +3978,51 @@ func (c *APIClient) UserApiTokensList(ctx context.Context, userId string, params
 // and `user_disabled` (the user is `disabled`, and this code wins over `user_not_invited`).
 func (c *APIClient) InvitesCreate(ctx context.Context, userId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewInvitesCreateRequest(c.Server, userId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// UserMfaReset performs a DELETE /v1/users/{userId}/mfa (the `UserMfaReset` operationId) request.
+//
+// Reset the MFA of a user. The operation removes all second factors and recovery codes of the user.
+// It revokes all sessions and refresh tokens of the user. It does not remove the password or the API tokens.
+// A user with no second factor also gives 204, and the sessions are also revoked.
+// The token needs a fresh MFA login: `amr` contains `mfa` and `auth_time` is at most 5 minutes old.
+// Else the response is 401 with the code `reauthentication_required` and the header
+// `WWW-Authenticate: Bearer error="insufficient_user_authentication", error_description="A fresh MFA login is necessary", max_age="300"`.
+// A token with no `amr` (service, agent, exchange, or API token) gets the same response.
+// A token with `act` does not satisfy MFA.
+// Error code of `NotFound`: `user_not_found`.
+// Error code of `Conflict`: `mfa_required`. The `userId` is the `sub` of the token.
+// An administrator cannot reset the own MFA with this operation. The check goes around the rule of `MeTotp_remove`.
+// The administrator uses the subcommand `identity reset-mfa <email>` of the identity service for this recovery.
+// The operation writes an audit entry with the action `identity:mfa:reset`, the target user, and the result.
+// It sends a security notice to the user.
+// The order of the checks: the token (401), the scopes (403), `reauthentication_required` (401),
+// `user_not_found` (404), `mfa_required` (409).
+func (c *APIClient) UserMfaReset(ctx context.Context, userId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUserMfaResetRequest(c.Server, userId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// UserMfaGet performs a GET /v1/users/{userId}/mfa (the `UserMfaGet` operationId) request.
+//
+// Read the MFA state of a user. The permission is `identity:mfa:read`, not `identity:user:read`. Error code of `NotFound`: `user_not_found`.
+func (c *APIClient) UserMfaGet(ctx context.Context, userId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUserMfaGetRequest(c.Server, userId)
 	if err != nil {
 		return nil, err
 	}
@@ -5194,6 +5492,60 @@ func NewMeApiTokensRevokeRequest(server string, tokenId string) (*http.Request, 
 	return req, nil
 }
 
+// NewMeMfaGetRequest constructs an http.Request for the MeMfaGet method
+func NewMeMfaGetRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/me/mfa")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewMeTotpRemoveRequest constructs an http.Request for the MeTotpRemove method
+func NewMeTotpRemoveRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/me/totp")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewPermissionManifestsListRequest constructs an http.Request for the PermissionManifestsList method
 func NewPermissionManifestsListRequest(server string, params *PermissionManifestsListParams) (*http.Request, error) {
 	var err error
@@ -5774,6 +6126,74 @@ func NewInvitesCreateRequest(server string, userId string) (*http.Request, error
 	}
 
 	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewUserMfaResetRequest constructs an http.Request for the UserMfaReset method
+func NewUserMfaResetRequest(server string, userId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "userId", userId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/users/%s/mfa", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewUserMfaGetRequest constructs an http.Request for the UserMfaGet method
+func NewUserMfaGetRequest(server string, userId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "userId", userId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/users/%s/mfa", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -6481,6 +6901,32 @@ type ClientWithResponsesInterface interface {
 	// Returns a wrapper object for the known response body format(s).
 	MeApiTokensRevokeWithResponse(ctx context.Context, tokenId string, reqEditors ...RequestEditorFn) (*MeApiTokensRevokeResponse, error)
 
+	// MeMfaGetWithResponse performs a GET /v1/me/mfa (the `MeMfaGet` operationId) request.
+	//
+	// Read the MFA state of the user. Error code of `Forbidden`: `user_token_required`.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	MeMfaGetWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*MeMfaGetResponse, error)
+
+	// MeTotpRemoveWithResponse performs a DELETE /v1/me/totp (the `MeTotpRemove` operationId) request.
+	//
+	// Remove the TOTP factor and all recovery codes of the user.
+	// The token needs a fresh MFA login: `amr` contains `mfa` and `auth_time` is at most 5 minutes old.
+	// Else the response is 401 with the code `reauthentication_required` and the header
+	// `WWW-Authenticate: Bearer error="insufficient_user_authentication", error_description="A fresh MFA login is necessary", max_age="300"`.
+	// A token with no `amr` (service, agent, exchange, or API token) gets the same response.
+	// A token with `act` does not satisfy MFA.
+	// The operation writes an audit entry with the action `identity:mfa:totp_remove`, the target user, and the result.
+	// It sends a security notice to the user.
+	// Error code of `Forbidden`: `user_token_required`.
+	// Error code of `NotFound`: `totp_not_found`.
+	// Error code of `Conflict`: `mfa_required`. The policy requires MFA for the user and TOTP is the last second factor.
+	// The order of the checks: the token (401), the scopes (403), `user_token_required` (403),
+	// `reauthentication_required` (401), `totp_not_found` (404), `mfa_required` (409).
+	//
+	// Returns a wrapper object for the known response body format(s).
+	MeTotpRemoveWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*MeTotpRemoveResponse, error)
+
 	// PermissionManifestsListWithResponse performs a GET /v1/permission-manifests (the `PermissionManifestsList` operationId) request.
 	//
 	// List the stored manifests.
@@ -6598,6 +7044,35 @@ type ClientWithResponsesInterface interface {
 	//
 	// Returns a wrapper object for the known response body format(s).
 	InvitesCreateWithResponse(ctx context.Context, userId string, reqEditors ...RequestEditorFn) (*InvitesCreateResponse, error)
+
+	// UserMfaResetWithResponse performs a DELETE /v1/users/{userId}/mfa (the `UserMfaReset` operationId) request.
+	//
+	// Reset the MFA of a user. The operation removes all second factors and recovery codes of the user.
+	// It revokes all sessions and refresh tokens of the user. It does not remove the password or the API tokens.
+	// A user with no second factor also gives 204, and the sessions are also revoked.
+	// The token needs a fresh MFA login: `amr` contains `mfa` and `auth_time` is at most 5 minutes old.
+	// Else the response is 401 with the code `reauthentication_required` and the header
+	// `WWW-Authenticate: Bearer error="insufficient_user_authentication", error_description="A fresh MFA login is necessary", max_age="300"`.
+	// A token with no `amr` (service, agent, exchange, or API token) gets the same response.
+	// A token with `act` does not satisfy MFA.
+	// Error code of `NotFound`: `user_not_found`.
+	// Error code of `Conflict`: `mfa_required`. The `userId` is the `sub` of the token.
+	// An administrator cannot reset the own MFA with this operation. The check goes around the rule of `MeTotp_remove`.
+	// The administrator uses the subcommand `identity reset-mfa <email>` of the identity service for this recovery.
+	// The operation writes an audit entry with the action `identity:mfa:reset`, the target user, and the result.
+	// It sends a security notice to the user.
+	// The order of the checks: the token (401), the scopes (403), `reauthentication_required` (401),
+	// `user_not_found` (404), `mfa_required` (409).
+	//
+	// Returns a wrapper object for the known response body format(s).
+	UserMfaResetWithResponse(ctx context.Context, userId string, reqEditors ...RequestEditorFn) (*UserMfaResetResponse, error)
+
+	// UserMfaGetWithResponse performs a GET /v1/users/{userId}/mfa (the `UserMfaGet` operationId) request.
+	//
+	// Read the MFA state of a user. The permission is `identity:mfa:read`, not `identity:user:read`. Error code of `NotFound`: `user_not_found`.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	UserMfaGetWithResponse(ctx context.Context, userId string, reqEditors ...RequestEditorFn) (*UserMfaGetResponse, error)
 
 	// UserRolesListWithResponse performs a GET /v1/users/{userId}/roles (the `UserRolesList` operationId) request.
 	//
@@ -8869,6 +9344,158 @@ func (r MeApiTokensRevokeResponse) ContentType() string {
 	return ""
 }
 
+type MeMfaGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *MfaStatus
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r MeMfaGetResponse) GetJSON200() *MfaStatus {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r MeMfaGetResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r MeMfaGetResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r MeMfaGetResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r MeMfaGetResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r MeMfaGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r MeMfaGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r MeMfaGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r MeMfaGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// MeTotpRemoveResponse401Headers the declared response headers of an HTTP 401 response for MeTotpRemove
+type MeTotpRemoveResponse401Headers struct {
+	WWWAuthenticate *string
+}
+
+type MeTotpRemoveResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *MeTotpRemove401ApplicationProblemPlusJSONResponseBody
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
+	ApplicationproblemJSON409 *Conflict
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+	// Headers401 the parsed response headers for an HTTP 401 response
+	Headers401 *MeTotpRemoveResponse401Headers
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r MeTotpRemoveResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r MeTotpRemoveResponse) GetApplicationproblemJSON401() *MeTotpRemove401ApplicationProblemPlusJSONResponseBody {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r MeTotpRemoveResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r MeTotpRemoveResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
+func (r MeTotpRemoveResponse) GetApplicationproblemJSON409() *Conflict {
+	return r.ApplicationproblemJSON409
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r MeTotpRemoveResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r MeTotpRemoveResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r MeTotpRemoveResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r MeTotpRemoveResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r MeTotpRemoveResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type PermissionManifestsListResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -9805,6 +10432,165 @@ func (r InvitesCreateResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r InvitesCreateResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// UserMfaResetResponse401Headers the declared response headers of an HTTP 401 response for UserMfaReset
+type UserMfaResetResponse401Headers struct {
+	WWWAuthenticate *string
+}
+
+type UserMfaResetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *UserMfaReset401ApplicationProblemPlusJSONResponseBody
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
+	ApplicationproblemJSON409 *Conflict
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+	// Headers401 the parsed response headers for an HTTP 401 response
+	Headers401 *UserMfaResetResponse401Headers
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r UserMfaResetResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r UserMfaResetResponse) GetApplicationproblemJSON401() *UserMfaReset401ApplicationProblemPlusJSONResponseBody {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r UserMfaResetResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r UserMfaResetResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
+func (r UserMfaResetResponse) GetApplicationproblemJSON409() *Conflict {
+	return r.ApplicationproblemJSON409
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r UserMfaResetResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r UserMfaResetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r UserMfaResetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UserMfaResetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UserMfaResetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type UserMfaGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *MfaStatus
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalServerError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r UserMfaGetResponse) GetJSON200() *MfaStatus {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r UserMfaGetResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r UserMfaGetResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r UserMfaGetResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r UserMfaGetResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r UserMfaGetResponse) GetApplicationproblemJSON500() *InternalServerError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r UserMfaGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r UserMfaGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UserMfaGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r UserMfaGetResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -10813,6 +11599,44 @@ func (c *ClientWithResponses) MeApiTokensRevokeWithResponse(ctx context.Context,
 	return ParseMeApiTokensRevokeResponse(rsp)
 }
 
+// MeMfaGetWithResponse performs a GET /v1/me/mfa (the `MeMfaGet` operationId) request.
+//
+// Read the MFA state of the user. Error code of `Forbidden`: `user_token_required`.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) MeMfaGetWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*MeMfaGetResponse, error) {
+	rsp, err := c.MeMfaGet(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseMeMfaGetResponse(rsp)
+}
+
+// MeTotpRemoveWithResponse performs a DELETE /v1/me/totp (the `MeTotpRemove` operationId) request.
+//
+// Remove the TOTP factor and all recovery codes of the user.
+// The token needs a fresh MFA login: `amr` contains `mfa` and `auth_time` is at most 5 minutes old.
+// Else the response is 401 with the code `reauthentication_required` and the header
+// `WWW-Authenticate: Bearer error="insufficient_user_authentication", error_description="A fresh MFA login is necessary", max_age="300"`.
+// A token with no `amr` (service, agent, exchange, or API token) gets the same response.
+// A token with `act` does not satisfy MFA.
+// The operation writes an audit entry with the action `identity:mfa:totp_remove`, the target user, and the result.
+// It sends a security notice to the user.
+// Error code of `Forbidden`: `user_token_required`.
+// Error code of `NotFound`: `totp_not_found`.
+// Error code of `Conflict`: `mfa_required`. The policy requires MFA for the user and TOTP is the last second factor.
+// The order of the checks: the token (401), the scopes (403), `user_token_required` (403),
+// `reauthentication_required` (401), `totp_not_found` (404), `mfa_required` (409).
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) MeTotpRemoveWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*MeTotpRemoveResponse, error) {
+	rsp, err := c.MeTotpRemove(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseMeTotpRemoveResponse(rsp)
+}
+
 // PermissionManifestsListWithResponse performs a GET /v1/permission-manifests (the `PermissionManifestsList` operationId) request.
 //
 // List the stored manifests.
@@ -11019,6 +11843,47 @@ func (c *ClientWithResponses) InvitesCreateWithResponse(ctx context.Context, use
 		return nil, err
 	}
 	return ParseInvitesCreateResponse(rsp)
+}
+
+// UserMfaResetWithResponse performs a DELETE /v1/users/{userId}/mfa (the `UserMfaReset` operationId) request.
+//
+// Reset the MFA of a user. The operation removes all second factors and recovery codes of the user.
+// It revokes all sessions and refresh tokens of the user. It does not remove the password or the API tokens.
+// A user with no second factor also gives 204, and the sessions are also revoked.
+// The token needs a fresh MFA login: `amr` contains `mfa` and `auth_time` is at most 5 minutes old.
+// Else the response is 401 with the code `reauthentication_required` and the header
+// `WWW-Authenticate: Bearer error="insufficient_user_authentication", error_description="A fresh MFA login is necessary", max_age="300"`.
+// A token with no `amr` (service, agent, exchange, or API token) gets the same response.
+// A token with `act` does not satisfy MFA.
+// Error code of `NotFound`: `user_not_found`.
+// Error code of `Conflict`: `mfa_required`. The `userId` is the `sub` of the token.
+// An administrator cannot reset the own MFA with this operation. The check goes around the rule of `MeTotp_remove`.
+// The administrator uses the subcommand `identity reset-mfa <email>` of the identity service for this recovery.
+// The operation writes an audit entry with the action `identity:mfa:reset`, the target user, and the result.
+// It sends a security notice to the user.
+// The order of the checks: the token (401), the scopes (403), `reauthentication_required` (401),
+// `user_not_found` (404), `mfa_required` (409).
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) UserMfaResetWithResponse(ctx context.Context, userId string, reqEditors ...RequestEditorFn) (*UserMfaResetResponse, error) {
+	rsp, err := c.UserMfaReset(ctx, userId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUserMfaResetResponse(rsp)
+}
+
+// UserMfaGetWithResponse performs a GET /v1/users/{userId}/mfa (the `UserMfaGet` operationId) request.
+//
+// Read the MFA state of a user. The permission is `identity:mfa:read`, not `identity:user:read`. Error code of `NotFound`: `user_not_found`.
+//
+// Returns a wrapper object for the known response body format(s).
+func (c *ClientWithResponses) UserMfaGetWithResponse(ctx context.Context, userId string, reqEditors ...RequestEditorFn) (*UserMfaGetResponse, error) {
+	rsp, err := c.UserMfaGet(ctx, userId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUserMfaGetResponse(rsp)
 }
 
 // UserRolesListWithResponse performs a GET /v1/users/{userId}/roles (the `UserRolesList` operationId) request.
@@ -13074,6 +13939,137 @@ func ParseMeApiTokensRevokeResponse(rsp *http.Response) (*MeApiTokensRevokeRespo
 	return response, nil
 }
 
+// ParseMeMfaGetResponse parses an HTTP response from a MeMfaGetWithResponse call
+func ParseMeMfaGetResponse(rsp *http.Response) (*MeMfaGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &MeMfaGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest MfaStatus
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseMeTotpRemoveResponse parses an HTTP response from a MeTotpRemoveWithResponse call
+func ParseMeTotpRemoveResponse(rsp *http.Response) (*MeTotpRemoveResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &MeTotpRemoveResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest MeTotpRemove401ApplicationProblemPlusJSONResponseBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 401:
+		var headers MeTotpRemoveResponse401Headers
+		if values := rsp.Header.Values("WWW-Authenticate"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "WWW-Authenticate", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.WWWAuthenticate = &value
+		}
+		response.Headers401 = &headers
+	}
+
+	return response, nil
+}
+
 // ParsePermissionManifestsListResponse parses an HTTP response from a PermissionManifestsListWithResponse call
 func ParsePermissionManifestsListResponse(rsp *http.Response) (*PermissionManifestsListResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -13864,6 +14860,144 @@ func ParseInvitesCreateResponse(rsp *http.Response) (*InvitesCreateResponse, err
 			headers.Pragma = value
 		}
 		response.Headers201 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseUserMfaResetResponse parses an HTTP response from a UserMfaResetWithResponse call
+func ParseUserMfaResetResponse(rsp *http.Response) (*UserMfaResetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UserMfaResetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest UserMfaReset401ApplicationProblemPlusJSONResponseBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 401:
+		var headers UserMfaResetResponse401Headers
+		if values := rsp.Header.Values("WWW-Authenticate"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "WWW-Authenticate", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.WWWAuthenticate = &value
+		}
+		response.Headers401 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseUserMfaGetResponse parses an HTTP response from a UserMfaGetWithResponse call
+func ParseUserMfaGetResponse(rsp *http.Response) (*UserMfaGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UserMfaGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest MfaStatus
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalServerError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
 	}
 
 	return response, nil

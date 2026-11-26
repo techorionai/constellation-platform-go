@@ -3,6 +3,8 @@ package auth
 import (
 	"context"
 	"errors"
+	"slices"
+	"time"
 )
 
 // PrincipalType is the kind of a principal.
@@ -68,6 +70,24 @@ type Principal struct {
 	// TokenType is the kind of token that the verifier accepted. The zero value
 	// means [TokenTypeAccess]. A service can refuse API tokens on some routes.
 	TokenType TokenType
+	// AuthMethods is the amr claim of the token (RFC 8176). It is empty if the
+	// token has none. The adapter keeps values that it does not know.
+	AuthMethods []string
+	// AuthTime is the auth_time claim of the token. It is the zero time if the
+	// token has none.
+	AuthTime time.Time
+}
+
+// HasMFA returns true if AuthMethods contains "mfa", Act is nil, and the token
+// type is not [TokenTypeAPI].
+//
+// HasMFA does not check the age of AuthTime. A sensitive action must use
+// [CheckMFA] or [RequireMFA], not HasMFA.
+func (p Principal) HasMFA() bool {
+	if p.Act != nil || p.TokenType.OrAccess() == TokenTypeAPI {
+		return false
+	}
+	return slices.Contains(p.AuthMethods, "mfa")
 }
 
 // HasScopes reports whether the principal has all the scopes. It returns true
@@ -128,6 +148,9 @@ var (
 	ErrWrongIssuer = errors.New("auth: wrong issuer")
 	// ErrMissingScope means the principal lacks a required scope.
 	ErrMissingScope = errors.New("auth: missing scope")
+	// ErrReauthenticationRequired means the token does not show a fresh MFA
+	// login.
+	ErrReauthenticationRequired = errors.New("auth: reauthentication required")
 	// ErrKeysUnavailable means the verifier has no signing keys.
 	ErrKeysUnavailable = errors.New("auth: signing keys unavailable")
 	// ErrIntrospectionUnavailable means the verifier cannot say if an API token
