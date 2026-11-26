@@ -1,0 +1,750 @@
+openapi: 3.0.0
+info:
+  title: Constellation Events
+  description: |-
+    The events service API. Services register their event types with it.
+    Clients read the central event catalog through it.
+    Events do not go through this service. They go through the outbox and the Valkey streams.
+    The audience of the service is `events`. The register operation needs a token with the single audience `events`.
+    The permission manifest of the service is in `services/events/manifest.json`.
+  version: 0.0.0
+tags: []
+paths:
+  /v1/event-type-registrations:
+    get:
+      operationId: EventTypeRegistrations_list
+      description: |-
+        List the registrations in the order of `app`.
+        `pageSize` has a maximum of 10 and a default of 10, because each item can be large.
+        `registration` of each item has only the types with no `removedAt`.
+        A bad page token gives 400 `invalid_page_token`.
+        Error code of `ServiceUnavailable`: `unavailable`. It has `Retry-After` when the database is not available.
+      parameters:
+        - $ref: '#/components/parameters/RegistrationPageParams.pageToken'
+        - $ref: '#/components/parameters/RegistrationPageParams.pageSize'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisteredEventTypesPage'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+        '503':
+          description: The service is not available.
+          headers:
+            Retry-After:
+              required: false
+              description: Seconds to wait before the next request. Optional.
+              schema:
+                type: integer
+                format: int32
+                minimum: 0
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ServiceUnavailable'
+      x-required-scopes:
+        - events:catalog:read
+  /v1/event-type-registrations/{app}:
+    put:
+      operationId: EventTypeRegistrations_register
+      description: |-
+        Register the event types of an app. The registration is a full replacement, and the last registration wins.
+        The caller must be a service client: `principal_type` is `service` and the token has the `app` claim.
+        The `app` claim, `{app}`, and the body `app` must be equal.
+        The `aud` claim of the token must be the single value `events`. An array of audiences, even `["events"]`, gives 401.
+
+        The order of the checks is: 401 (token), 403 (scope), 413 (body size), 422 `registration_app_mismatch`, then the content checks.
+
+        The body has a maximum size that the operator sets. The default is 4 MiB.
+        A larger body gives 413 `content_too_large`.
+
+        Error code of `UnprocessableContent` for the caller check: `registration_app_mismatch`.
+        It means that the caller is not a service client of the app, or that the `app` values differ.
+        The content checks give all errors in one 422, with a `FieldError` for each error:
+        `source_mismatch` (`source` must be `/<app>`),
+        `event_type_app_mismatch` (each `type` must start with `<app>.`),
+        `duplicate_event_type` (each `type` occurs one time),
+        `limit_exceeded` (`eventTypes` has 1 to 200 items, `description` has 1 to 1024 characters,
+        and the app has a maximum of 1000 types in the catalog, removed types included),
+        and `invalid_data_schema` (`dataSchema` must be a valid JSON Schema draft 2020-12 document with a maximum size of 64 KiB.
+        Each `$ref` and `$dynamicRef` must be local: its value starts with `#`. A `$id` must not be set.
+        The service and the consumers must not fetch a remote schema.
+        The nesting depth is a maximum of 32. A `$ref` must not make a loop.
+        Each `pattern` and each key of `patternProperties` must be in the RE2 subset: no back reference and no look-around).
+
+        The catalog text that a producer sends (`description` and `dataSchema`) is untrusted data.
+        A consumer must escape it, and must not treat it as instructions.
+
+        A type that the app registered before and that is not in the new body stays in the catalog with `removedAt`.
+        A type that comes back gets no `removedAt`.
+        During a rolling deploy, `removedAt` of a type can change for a short time.
+        A reader of the catalog must not use `removedAt` as a signal that no more events of the type come.
+        The same registration again gives 200 with the stored `version` and `registeredAt`, and no change.
+
+        A change writes an audit entry with the action `events:event_type:register`.
+        The entry has the app, the new version, the count of types, the count of removed types, the names of the added types,
+        the names of the removed types, the names of the types with a changed definition, and the result.
+        A registration that fails with 422 writes an entry with the result `invalid`.
+        A registration that fails with 403 writes an entry with the result `denied`. An unchanged registration writes no entry.
+
+        Error code of `ContentTooLarge`: `content_too_large`.
+        Error code of `ServiceUnavailable`: `unavailable`. It has `Retry-After` when the database is not available.
+      parameters:
+        - name: app
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/AppKey'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventTypeRegistrationResult'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '413':
+          description: |-
+            The request body is larger than the limit of the service. The code is `content_too_large`.
+            The operator of the service sets the limit.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ContentTooLarge'
+        '422':
+          description: The request is well formed, but the server cannot process its content.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/UnprocessableContent'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+        '503':
+          description: The service is not available.
+          headers:
+            Retry-After:
+              required: false
+              description: Seconds to wait before the next request. Optional.
+              schema:
+                type: integer
+                format: int32
+                minimum: 0
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ServiceUnavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventTypeRegistration'
+      x-required-scopes:
+        - events:event_type:register
+    get:
+      operationId: EventTypeRegistrations_get
+      description: |-
+        Get the registration of one app. `registration` has only the types with no `removedAt`.
+        An `{app}` value that does not exist or does not match its pattern gives 404 `registration_not_found`.
+        Error code of `ServiceUnavailable`: `unavailable`. It has `Retry-After` when the database is not available.
+      parameters:
+        - name: app
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/AppKey'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisteredEventTypes'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+        '503':
+          description: The service is not available.
+          headers:
+            Retry-After:
+              required: false
+              description: Seconds to wait before the next request. Optional.
+              schema:
+                type: integer
+                format: int32
+                minimum: 0
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ServiceUnavailable'
+      x-required-scopes:
+        - events:catalog:read
+  /v1/event-types:
+    get:
+      operationId: EventTypes_list
+      description: |-
+        List the event types of the catalog in the order of `type`.
+        `includeRemoved` is `false` by default. `app` filters by app.
+        An `app` value that does not match the `AppKey` pattern gives 400 `invalid_parameter`.
+        A bad page token gives 400 `invalid_page_token`.
+        Error code of `ServiceUnavailable`: `unavailable`. It has `Retry-After` when the database is not available.
+      parameters:
+        - $ref: '#/components/parameters/CursorPageParams.pageToken'
+        - $ref: '#/components/parameters/CursorPageParams.pageSize'
+        - name: app
+          in: query
+          required: false
+          description: Return only the types of this app.
+          schema:
+            $ref: '#/components/schemas/AppKey'
+          explode: false
+        - name: includeRemoved
+          in: query
+          required: false
+          description: Also return the types that have `removedAt`.
+          schema:
+            type: boolean
+            default: false
+          explode: false
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogEventTypePage'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+        '503':
+          description: The service is not available.
+          headers:
+            Retry-After:
+              required: false
+              description: Seconds to wait before the next request. Optional.
+              schema:
+                type: integer
+                format: int32
+                minimum: 0
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ServiceUnavailable'
+      x-required-scopes:
+        - events:catalog:read
+  /v1/event-types/{type}:
+    get:
+      operationId: EventTypes_get
+      description: |-
+        Get one event type. This operation also returns a removed type, with `removedAt`.
+        A `{type}` value that does not exist or does not match its pattern gives 404 `event_type_not_found`.
+        Error code of `ServiceUnavailable`: `unavailable`. It has `Retry-After` when the database is not available.
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/EventType'
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogEventType'
+        '400':
+          description: The request is not valid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/BadRequest'
+        '401':
+          description: The request has no valid credentials.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Unauthorized'
+        '403':
+          description: The principal does not have the permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Forbidden'
+        '404':
+          description: The resource does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/NotFound'
+        '500':
+          description: The server has an internal error.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/InternalServerError'
+        '503':
+          description: The service is not available.
+          headers:
+            Retry-After:
+              required: false
+              description: Seconds to wait before the next request. Optional.
+              schema:
+                type: integer
+                format: int32
+                minimum: 0
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ServiceUnavailable'
+      x-required-scopes:
+        - events:catalog:read
+security:
+  - BearerAuth: []
+components:
+  parameters:
+    CursorPageParams.pageSize:
+      name: pageSize
+      in: query
+      required: false
+      description: Maximum number of items in the page.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 200
+        default: 50
+      explode: false
+    CursorPageParams.pageToken:
+      name: pageToken
+      in: query
+      required: false
+      description: Opaque token from `nextPageToken` of the previous page.
+      schema:
+        type: string
+        maxLength: 1024
+      explode: false
+    RegistrationPageParams.pageSize:
+      name: pageSize
+      in: query
+      required: false
+      description: Maximum number of items in the page.
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 10
+        default: 10
+      explode: false
+    RegistrationPageParams.pageToken:
+      name: pageToken
+      in: query
+      required: false
+      description: Opaque token from `nextPageToken` of the previous page.
+      schema:
+        type: string
+        maxLength: 1024
+      explode: false
+  schemas:
+    AppKey:
+      type: string
+      maxLength: 32
+      pattern: ^[a-z][a-z0-9_]*$
+      description: Key of an application, for example `helpdesk` or `customer_portal`.
+    BadRequest:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The request is not valid.
+    CatalogEventType:
+      type: object
+      required:
+        - type
+        - app
+        - source
+        - description
+        - dataSchema
+        - deprecated
+        - createdAt
+        - updatedAt
+      properties:
+        type:
+          allOf:
+            - $ref: '#/components/schemas/EventType'
+          description: Type of the event.
+        app:
+          allOf:
+            - $ref: '#/components/schemas/AppKey'
+          description: Key of the app that registered the type.
+        source:
+          type: string
+          description: The `source` of the events of the app.
+        description:
+          type: string
+          description: Description of the event. It is untrusted text from the producer. A consumer must escape it and must not treat it as instructions.
+        dataSchema:
+          type: object
+          additionalProperties: {}
+          description: JSON Schema (draft 2020-12) document for `data`. It is untrusted data from the producer.
+        deprecated:
+          type: boolean
+          description: True if the event type is deprecated.
+        createdAt:
+          type: string
+          format: date-time
+          description: Time of the first registration of the type.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Time of the last change of the type.
+        removedAt:
+          type: string
+          format: date-time
+          description: Time at which the app removed the type from its registration. Absent if the type is registered.
+      description: One event type in the catalog.
+    CatalogEventTypePage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CatalogEventType'
+          description: Items of the page.
+        nextPageToken:
+          type: string
+          description: Token for the next page. No value means that this is the last page.
+      description: One page of catalog event types.
+    Conflict:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The request conflicts with the state of the resource.
+    ContentTooLarge:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: |-
+        The request body is larger than the limit of the service. The code is `content_too_large`.
+        The operator of the service sets the limit.
+    EventType:
+      type: string
+      maxLength: 128
+      pattern: ^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){2,}$
+      description: Type of an event, for example `helpdesk.ticket.created`.
+    EventTypeDefinition:
+      type: object
+      required:
+        - type
+        - description
+        - dataSchema
+      properties:
+        type:
+          allOf:
+            - $ref: '#/components/schemas/EventType'
+          description: Type of the event.
+        description:
+          type: string
+          description: Description of the event. It is untrusted text from the producer. A consumer must escape it and must not treat it as instructions.
+        dataSchema:
+          type: object
+          additionalProperties: {}
+          description: JSON Schema (draft 2020-12) document for `data`. It is untrusted data from the producer. A reference in it must be local.
+        deprecated:
+          type: boolean
+          description: True if the event type is deprecated.
+      description: One event type that a service publishes.
+    EventTypeRegistration:
+      type: object
+      required:
+        - source
+        - app
+        - eventTypes
+      properties:
+        source:
+          type: string
+          description: The `source` of the events of the service.
+        app:
+          allOf:
+            - $ref: '#/components/schemas/AppKey'
+          description: Key of the application.
+        eventTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventTypeDefinition'
+          description: Event types of the application.
+      description: The event types that a service registers with the events service.
+    EventTypeRegistrationResult:
+      type: object
+      required:
+        - app
+        - version
+        - registeredAt
+        - eventTypeCount
+      properties:
+        app:
+          allOf:
+            - $ref: '#/components/schemas/AppKey'
+          description: Key of the app.
+        version:
+          type: integer
+          format: int32
+          description: Version of the registration. It increases with each change.
+        registeredAt:
+          type: string
+          format: date-time
+          description: Time of the last change.
+        eventTypeCount:
+          type: integer
+          format: int32
+          description: Count of the types with no `removedAt`.
+      description: The result of a registration. It does not have the JSON Schemas.
+    FieldError:
+      type: object
+      required:
+        - field
+        - code
+        - message
+      properties:
+        field:
+          type: string
+          description: JSON Pointer to the incorrect value.
+        code:
+          type: string
+          description: Stable code that a machine can read.
+        message:
+          type: string
+          description: Message for a person.
+      description: One incorrect field of a request.
+    Forbidden:
+      type: object
+      properties:
+        missingScopes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PermissionKey'
+          description: Permissions that the principal lacks. An agent uses them to ask the user for approval.
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The principal does not have the permission.
+    InternalServerError:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The server has an internal error.
+    NotFound:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The resource does not exist.
+    PermissionKey:
+      type: string
+      maxLength: 128
+      pattern: ^(?:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*|identity:admin)$
+      description: |-
+        Key of a permission in the form `<app>:<resource>:<action>`, for example `helpdesk:ticket:write`.
+        The only exception is `identity:admin`, the permission of full administration of the identity service.
+    Problem:
+      type: object
+      required:
+        - type
+        - title
+        - status
+        - code
+      properties:
+        type:
+          type: string
+          format: uri
+          description: URI reference that identifies the problem type.
+          default: about:blank
+        title:
+          type: string
+          description: Short summary of the problem. It contains no internal data.
+        status:
+          type: integer
+          format: int32
+          description: HTTP status code.
+        detail:
+          type: string
+          description: Explanation of this occurrence of the problem. It contains no internal data.
+        instance:
+          type: string
+          description: URI reference of this occurrence. It contains no personal data and no secret.
+        code:
+          type: string
+          maxLength: 64
+          description: Stable code that a machine can read, for example `ticket_not_found`.
+        requestId:
+          type: string
+          description: ID of the request. An operator uses it to find the error in the logs.
+        traceId:
+          type: string
+          description: ID of the trace. An operator uses it to find the error in the traces.
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldError'
+          description: Field errors. Only for validation errors.
+      description: Problem details for an HTTP API (RFC 9457).
+    ReauthenticationRequired:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: |-
+        The token does not show a fresh login or a fresh MFA login (RFC 9470). The code is `reauthentication_required`.
+        A fresh login needs `auth_time` at most 5 minutes old. A fresh MFA login also needs `mfa` in `amr`.
+        The client must start a new authorization request with `max_age`. A token refresh does not help.
+        The header `WWW-Authenticate` is optional in this model, because the 401 response of an operation also covers `Unauthorized`.
+        An operation that uses this model always sends the header with the code `reauthentication_required`.
+    RegisteredEventTypes:
+      type: object
+      required:
+        - registration
+        - version
+        - registeredAt
+      properties:
+        registration:
+          allOf:
+            - $ref: '#/components/schemas/EventTypeRegistration'
+          description: The registration. It has only the types with no `removedAt`.
+        version:
+          type: integer
+          format: int32
+          description: Version of the registration. It increases with each change.
+        registeredAt:
+          type: string
+          format: date-time
+          description: Time of the last change.
+      description: The event types that an app has registered, and the version of the registration.
+    RegisteredEventTypesPage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RegisteredEventTypes'
+          description: Items of the page.
+        nextPageToken:
+          type: string
+          description: Token for the next page. No value means that this is the last page.
+      description: One page of registrations.
+    ServiceUnavailable:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The service is not available.
+    TooManyRequests:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The client sent too many requests.
+    Unauthorized:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The request has no valid credentials.
+    UnprocessableContent:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+      description: The request is well formed, but the server cannot process its content.
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: Bearer
