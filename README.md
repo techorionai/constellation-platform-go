@@ -2,7 +2,7 @@
 
 Shared Go library of the Constellation platform. Each service repository imports its packages.
 
-Packages in this release: `config`, `telemetry`, `clients/postgres`, `clients/valkey`, `migrate`, `migrate/postgres`, `health`, `health/postgres`, `health/valkey`, `executor`, `decorators`, `cache`, `cache/valkey`, `transaction`, `transaction/postgres`, `secrets`, `secrets/postgres`, `retention`, `retention/postgres`, `outbox`, `outbox/postgres`, `streams`, `streams/valkey`, `requestid`, `auth`, `auth/jwt`, `auth/introspect`, `auth/clientcred`, `clients/identity`, `manifest`, `resources/test/containers`, `resources/test/issuer`, and `resources/test/mock`.
+Packages in this release: `config`, `telemetry`, `clients/postgres`, `clients/valkey`, `migrate`, `migrate/postgres`, `health`, `health/postgres`, `health/valkey`, `executor`, `decorators`, `cache`, `cache/valkey`, `transaction`, `transaction/postgres`, `secrets`, `secrets/postgres`, `retention`, `retention/postgres`, `outbox`, `outbox/postgres`, `streams`, `streams/valkey`, `requestid`, `auth`, `auth/jwt`, `auth/introspect`, `auth/clientcred`, `clients/identity`, `clients/events`, `manifest`, `eventtypes`, `resources/test/containers`, `resources/test/issuer`, and `resources/test/mock`.
 
 ## Layout
 
@@ -12,8 +12,10 @@ telemetry/                   OpenTelemetry setup
 clients/postgres/            pgxpool constructor
 clients/valkey/              valkey-go constructor
 clients/identity/            Generated identity client and manifest registry adapter
+clients/events/              Generated events client and event type registry adapter
 api/openapi/                 OpenAPI file and tag of the contracts release
 manifest/                    Permission manifest publisher, port, and loader
+eventtypes/                  Event type registration loader, checks, port, and publisher
 requestid/                   Request ID middleware
 auth/                        Principal, verifier port, scope checks, HTTP middleware
 auth/jwt/                    JWKS verifier for access tokens
