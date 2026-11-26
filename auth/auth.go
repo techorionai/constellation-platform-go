@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"regexp"
 	"slices"
 	"time"
 )
@@ -194,3 +195,10 @@ type ClientAssertion interface {
 	// audience. Each call returns a new assertion with a new jti.
 	Assertion(ctx context.Context) (string, error)
 }
+
+// appKeyPattern is the AppKey pattern of the contracts, with a maximum of 32 characters.
+var appKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+
+// ValidAppKey reports whether s is a valid app key: a lowercase letter, then
+// lowercase letters, digits, or underscores, with a maximum of 32 characters.
+func ValidAppKey(s string) bool { return appKeyPattern.MatchString(s) }

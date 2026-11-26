@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"regexp"
 	"strings"
@@ -177,7 +178,7 @@ func Load(fsys fs.FS, path string) (PermissionManifest, error) {
 	if err := dec.Decode(&m); err != nil {
 		return PermissionManifest{}, fmt.Errorf("manifest: cannot parse %s: %w", path, err)
 	}
-	if dec.More() {
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return PermissionManifest{}, fmt.Errorf("manifest: %s has data after the manifest", path)
 	}
 	if err := m.Validate(); err != nil {

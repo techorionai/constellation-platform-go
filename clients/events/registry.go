@@ -1,6 +1,7 @@
 package events
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -50,13 +51,17 @@ func (r *EventTypeRegistry) Register(ctx context.Context, reg eventtypes.Registr
 		Source:     reg.Source,
 		EventTypes: make([]EventTypeDefinition, 0, len(reg.EventTypes)),
 	}
-	for _, t := range reg.EventTypes {
+	for i, t := range reg.EventTypes {
+		// UseNumber keeps the digits of a large integer. The body has the
+		// same numbers as the file.
 		var schema map[string]any
-		if err := json.Unmarshal(t.DataSchema, &schema); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(t.DataSchema))
+		dec.UseNumber()
+		if err := dec.Decode(&schema); err != nil {
 			// Validate already refuses this. Do not send a bad body.
 			return eventtypes.Result{}, &eventtypes.InvalidError{
 				Code:     "invalid_data_schema",
-				Problems: []eventtypes.Problem{{Code: "invalid_data_schema", Field: "/eventTypes/dataSchema"}},
+				Problems: []eventtypes.Problem{{Code: "invalid_data_schema", Field: fmt.Sprintf("/eventTypes/%d/dataSchema", i)}},
 			}
 		}
 		def := EventTypeDefinition{Type: t.Type, Description: t.Description, DataSchema: schema}

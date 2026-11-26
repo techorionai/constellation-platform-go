@@ -125,11 +125,39 @@ func TestU2LoadBadRules(t *testing.T) {
 		}
 	}
 
+	// R5: a $ref key in data is not a reference. A $ref in a schema keyword is.
+	okSchemas := []string{
+		`{"const":{"$ref":"https://example.com/x"}}`,
+		`{"enum":[{"$ref":"other.json"}],"default":{"$dynamicRef":"x"},"examples":[{"$ref":"y"}]}`,
+		`{"properties":{"$ref":{"type":"string"}}}`,
+	}
+	for _, s := range okSchemas {
+		r := goodReg()
+		r.EventTypes[0].DataSchema = json.RawMessage(s)
+		if err := r.Validate(); err != nil {
+			t.Errorf("%s: %v", s, err)
+		}
+	}
+	nested := []string{
+		`{"properties":{"a":{"$ref":"https://example.com/x"}}}`,
+		`{"allOf":[{"$dynamicRef":"other.json"}]}`,
+		`{"$defs":{"a":{"items":{"$ref":"other.json"}}}}`,
+	}
+	for _, s := range nested {
+		r := goodReg()
+		r.EventTypes[0].DataSchema = json.RawMessage(s)
+		if err := r.Validate(); err == nil || !strings.Contains(err.Error(), "data_schema_ref") {
+			t.Errorf("%s: err = %v", s, err)
+		}
+	}
+
 	// File rules.
 	files := map[string]string{
-		"unknown field": `{"source":"/helpdesk","app":"helpdesk","eventTypes":[],"x":1}`,
-		"trailing data": mustJSON(t, goodReg()) + `{}`,
-		"too large":     `{"source":"` + strings.Repeat("a", eventtypes.MaxRegistrationBytes) + `"}`,
+		"unknown field":    `{"source":"/helpdesk","app":"helpdesk","eventTypes":[],"x":1}`,
+		"trailing data":    mustJSON(t, goodReg()) + `{}`,
+		"trailing brace":   mustJSON(t, goodReg()) + `}`,
+		"trailing bracket": mustJSON(t, goodReg()) + `]`,
+		"too large":        `{"source":"` + strings.Repeat("a", eventtypes.MaxRegistrationBytes) + `"}`,
 	}
 	for name, content := range files {
 		if _, err := eventtypes.Load(fstest.MapFS{"f.json": {Data: []byte(content)}}, "f.json"); err == nil {

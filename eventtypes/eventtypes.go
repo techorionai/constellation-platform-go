@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"regexp"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+
+	"github.com/techorionai/constellation-platform-go/auth"
 )
 
 // Limits of the events service.
@@ -22,7 +25,6 @@ const (
 	// MaxDataSchemaBytes is the largest dataSchema of one event type.
 	MaxDataSchemaBytes = 64 << 10
 
-	maxAppLen         = 32
 	maxTypeLen        = 128
 	maxTypes          = 200
 	maxDescriptionLen = 1024
@@ -30,7 +32,6 @@ const (
 )
 
 var (
-	appPattern  = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 	typePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){2,}$`)
 )
 
@@ -94,7 +95,7 @@ func (r Registration) Validate() error {
 	add := func(ptr, format string, args ...any) {
 		errs = append(errs, fmt.Errorf("%s: %s", ptr, fmt.Sprintf(format, args...)))
 	}
-	if !appPattern.MatchString(r.App) || len(r.App) > maxAppLen {
+	if !auth.ValidAppKey(r.App) {
 		add("/app", "app_key: %q is not a valid app key", r.App)
 	}
 	if r.Source != "/"+r.App {
@@ -191,7 +192,7 @@ func Load(fsys fs.FS, path string) (Registration, error) {
 	if err := dec.Decode(&r); err != nil {
 		return Registration{}, fmt.Errorf("eventtypes: cannot parse %s: %w", path, err)
 	}
-	if dec.More() {
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return Registration{}, fmt.Errorf("eventtypes: %s has data after the registration", path)
 	}
 	if err := r.Validate(); err != nil {
@@ -200,23 +201,48 @@ func Load(fsys fs.FS, path string) (Registration, error) {
 	return r, nil
 }
 
-// checkLocalRefs reports a $ref or $dynamicRef that does not start with "#".
-// A reference must point into the schema itself.
+// Keywords whose value is one schema, a list of schemas, or a map of schemas.
+// checkLocalRefs goes only into these keywords. It does not go into const, enum,
+// default, examples, or an unknown keyword, because their values are data.
+var (
+	schemaKeywords     = []string{"items", "additionalItems", "additionalProperties", "unevaluatedItems", "unevaluatedProperties", "contains", "propertyNames", "not", "if", "then", "else", "contentSchema"}
+	schemaListKeywords = []string{"allOf", "anyOf", "oneOf", "prefixItems", "items"}
+	schemaMapKeywords  = []string{"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"}
+)
+
+// checkLocalRefs reports a $ref or $dynamicRef of a schema that does not start
+// with "#". A reference must point into the schema itself. It examines the
+// schema keywords only.
 func checkLocalRefs(v any) error {
-	switch x := v.(type) {
-	case map[string]any:
-		for k, item := range x {
-			if s, ok := item.(string); ok && (k == "$ref" || k == "$dynamicRef") && !strings.HasPrefix(s, "#") {
-				return fmt.Errorf("data_schema_ref: %s %q must be a local reference that starts with #", k, s)
-			}
-			if err := checkLocalRefs(item); err != nil {
-				return err
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	for _, k := range []string{"$ref", "$dynamicRef"} {
+		if s, ok := m[k].(string); ok && !strings.HasPrefix(s, "#") {
+			return fmt.Errorf("data_schema_ref: %s %q must be a local reference that starts with #", k, s)
+		}
+	}
+	for _, k := range schemaKeywords {
+		if err := checkLocalRefs(m[k]); err != nil {
+			return err
+		}
+	}
+	for _, k := range schemaListKeywords {
+		if list, ok := m[k].([]any); ok {
+			for _, item := range list {
+				if err := checkLocalRefs(item); err != nil {
+					return err
+				}
 			}
 		}
-	case []any:
-		for _, item := range x {
-			if err := checkLocalRefs(item); err != nil {
-				return err
+	}
+	for _, k := range schemaMapKeywords {
+		if sub, ok := m[k].(map[string]any); ok {
+			for _, item := range sub {
+				if err := checkLocalRefs(item); err != nil {
+					return err
+				}
 			}
 		}
 	}

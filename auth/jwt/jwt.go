@@ -449,7 +449,7 @@ func (v *Verifier) principal(c claims) (auth.Principal, error) {
 	}
 	if ptype == auth.PrincipalService && c.App != nil {
 		var app string
-		if err := json.Unmarshal(c.App, &app); err != nil || !appClaimPattern.MatchString(app) {
+		if err := json.Unmarshal(c.App, &app); err != nil || !auth.ValidAppKey(app) {
 			return auth.Principal{}, invalid("app")
 		}
 		p.App = app
@@ -466,9 +466,6 @@ func (v *Verifier) principal(c claims) (auth.Principal, error) {
 	}
 	return p, nil
 }
-
-// appClaimPattern is the AppKey pattern of the contract, with a maximum of 32 characters.
-var appClaimPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 
 // Range of a time claim: the years 1 to 9999.
 const (
