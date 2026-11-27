@@ -256,12 +256,21 @@ An alert on a high rate of `keys_unavailable` or of `network_error` shows that t
 - A consumer group is `<app>` or `<app>.<name>`.
 - The logs and the spans never have the `data` of an event.
 
+### Audit entries
+
+- Write an audit entry only through the audit writer (`audit.Writer`) in the database transaction of the change. The entry goes to the table `platform_audit_outbox`, and a second relay (`RelayOptions.Name` `audit`) adds it to `audit.stream:<app>`.
+- The actor of an audit entry is the verified principal in the context. `audit.Entry` has no actor field. With no principal, the actor is the client ID of the service (`audit.Config.ClientID`) with the type `service`.
+- The writer copies the request ID, the client IP address, and the user agent from the context. Use `requestid.Middleware` and `clientinfo.Middleware` before the handlers. Set `TRUSTED_PROXIES` to the addresses of the own proxies only.
+- Only the audit service reads audit streams. Each service user gets `AuditProducerSelectors` and can write only its own audit stream. Only the audit service user gets `AuditReaderSelectors`. The audit service finds the producers with the Valkey set `audit.streams` (`streamsvk.AuditApps`), because the install refuses `SCAN`.
+- The retention of audit entries uses two jobs with a default period of 7 days: `audit_outbox` and `audit_stream`.
+- An audit entry has no secret, no token, and no password.
+
 ### Event metrics and spans
 
 | Name | Type | Unit | Attributes | Meaning |
 | ---- | ---- | ---- | ---------- | ------- |
-| `constellation.outbox.published` | Counter | `{event}` | `outcome` (`ok`, `error`) | The events that the relay published. |
-| `constellation.outbox.lag` | Gauge | `s` | None | The age of the oldest unpublished outbox row. 0 if there is none. Each instance reports the same value. An alert uses `max`. |
+| `constellation.outbox.published` | Counter | `{event}` | `outbox` (the relay name: `events` or `audit`), `outcome` (`ok`, `error`, `db_error`) | The events that the relay published. |
+| `constellation.outbox.lag` | Gauge | `s` | `outbox` | The age of the oldest unpublished outbox row. 0 if there is none. Each instance reports the same value. An alert uses `max`. |
 | `constellation.events.consumer.handled` | Counter | `{message}` | `stream`, `group`, `outcome` (`ok`, `error`, `dropped`) | The messages that a consumer handled. |
 | `constellation.events.consumer.lost` | Counter | `{message}` | `stream`, `group` | The pending messages that the trim deleted before the consumer handled them. |
 
@@ -282,6 +291,7 @@ An alert on a high rate of `keys_unavailable` or of `network_error` shows that t
 - The retention adapters use the pool directly. A tick is not part of a caller transaction.
 - A tick uses 2 pool connections: the lock connection for the full tick, and one connection for each `Purge` call. Set `MaxConns` with spare connections for the jobs, in addition to the connections for requests.
 - The retention of events uses two jobs with a default period of 3 days: `outbox` (the table purger with the time column `published_at`, which keeps unpublished rows) and `event_stream` (`streams/valkey.NewTrimPurger`, which trims the stream of the service).
+- The retention of audit entries uses two jobs with a default period of 7 days: `audit_outbox` (the table purger on `platform_audit_outbox`) and `audit_stream` (`streams/valkey.NewTrimPurger` with `WithFamily(streams.Audit)`).
 
 ## Tests
 

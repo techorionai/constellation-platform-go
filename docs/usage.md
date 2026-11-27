@@ -33,6 +33,9 @@ go get github.com/techorionai/constellation-platform-go@vX.Y.Z
 | [`outbox/postgres`](#outboxpostgres) | PostgreSQL outbox table, writer, store, and migrations. |
 | [`streams`](#streams) | Event stream names, consumer groups, and the consumer runner. |
 | [`streams/valkey`](#streamsvalkey) | Valkey publisher, consumer group, lag, and trim purger. |
+| [`audit`](#audit) | Audit entry writer for the audit outbox. |
+| [`audit/postgres`](#auditpostgres) | PostgreSQL audit outbox table, writer, and migrations. |
+| [`clientinfo`](#clientinfo) | Client IP address and user agent middleware. |
 | [`requestid`](#requestid) | Request ID middleware. |
 | [`auth`](#auth) | Principal, token verifier port, `ByFormat`, scope checks, and HTTP middleware. |
 | [`auth/jwt`](#authjwt) | JWKS token verifier for RFC 9068 access tokens. |
@@ -1431,11 +1434,12 @@ The writer sets `specversion` `1.0`, `id` (a UUIDv7), `source` `/<app>`, `type`,
 | `Interval` | `1s` | `100ms` or more. The wait after an empty batch. |
 | `BatchSize` | 100 | 1 to 500. A batch has a maximum of 16 MiB of payload (`MaxBatchBytes`). |
 | `PublishTimeout` | `10s` | `1s` to `1m`. The store keeps the row locks while the relay publishes. |
+| `Name` | `events` | `^[a-z][a-z0-9_]{0,31}$`. The value of the metric attribute `outbox`. An audit relay uses `audit`. |
 
 - A full batch (by count or by bytes) starts the next tick with no wait.
 - After an error, the relay waits from 1 s to 1 min with jitter. `Notify` does not cut this wait. The log record has the error type and not the event data.
 - More than one instance can run the relay. A crash after the publish and before the commit publishes the rows again. Delivery is at least once. The order of events is not guaranteed.
-- Metrics: `constellation.outbox.published` (counter, `{event}`, attribute `outcome` = `ok`, `error` for a publish error, or `db_error` for a database error) and `constellation.outbox.lag` (gauge, `s`, the age of the oldest unpublished row, 0 when there is none). Each instance reports the same lag. An alert uses `max`. The gauge callback has a time limit of 5 s. On an error, it logs at `warn` level and reports no value.
+- Metrics: `constellation.outbox.published` (counter, `{event}`, attributes `outbox` = the relay name and `outcome` = `ok`, `error` for a publish error, or `db_error` for a database error) and `constellation.outbox.lag` (gauge, `s`, attribute `outbox`, the age of the oldest unpublished row, 0 when there is none). Each instance reports the same lag. An alert uses `max`. The gauge callback has a time limit of 5 s. On an error, it logs at `warn` level and reports no value.
 - Span `outbox.relay.publish` for each batch with 1 or more events. Attributes: `constellation.outbox.events` and `outcome`.
 
 ## outbox/postgres
@@ -1459,7 +1463,7 @@ _, err = migrate.Run(ctx, migratepg.NewLocker(db.Pool, outboxpg.MigrationsTable)
 ```
 
 - `NewWriter(pool, cfg)` returns the writer. It gets the transaction with `clients/postgres.TxFromContext`. A write outside a transaction returns `outbox.ErrNoTransaction`, because it would break the outbox rule. It inserts all events of one call with one batch.
-- `NewStore(pool)` returns the store. `Process` selects unpublished rows with `FOR UPDATE SKIP LOCKED`, calls the relay function, sets `published_at`, and commits. If the function fails, it rolls back.
+- `NewStore(pool)` returns the store for `platform_outbox`. `NewStoreFor(pool, table)` returns the store for another table with the same columns, for example `platform_audit_outbox`. The table name must match `^[a-z_][a-z0-9_]{0,62}$`, and the function quotes it. An invalid name returns `outbox.ErrInvalidConfig`. `Process` selects unpublished rows with `FOR UPDATE SKIP LOCKED`, calls the relay function, sets `published_at`, and commits. If the function fails, it rolls back.
 - The table has the columns `id`, `event_id` (unique), `type`, `payload` (jsonb, the full CloudEvent), `created_at`, and `published_at`. A later change follows the expand and contract rule.
 
 ### Outbox retention
@@ -1481,6 +1485,7 @@ Import path: `github.com/techorionai/constellation-platform-go/streams`
 Environment variables: None.
 
 - The stream of an app is `events.stream:<app>` (`streams.StreamKey`). Stream keys do not use the `Keyspace` of the service. A service name has no `.`, so no root pattern `~<svc>:*` matches a stream key.
+- A stream belongs to a family (`streams.Family`). `streams.Events` (the default) has the prefix `events.stream:`. `streams.Audit` has the prefix `audit.stream:`. `streams.KeyFor(family, app)` returns the key. `StreamKey(app)` equals `KeyFor(Events, app)`. The audit key prefix has a `.` too, so no root pattern `~<svc>:*` matches it. Only the audit service reads audit streams. The Valkey set `audit.streams` (`streams.AuditIndexKey`) lists the apps that write an audit stream.
 - A group is named `<app>` or `<app>.<name>` (`streams.GroupName`). `<name>` matches `^[a-z][a-z0-9_]{0,31}$`. `streams.ValidGroup` checks that a group belongs to an app.
 - `streams.NewConsumer(group, handler, streams.ConsumerOptions{})` makes the consumer. `Run(ctx)` loops until `ctx` ends and returns `nil`.
 
@@ -1532,12 +1537,16 @@ Environment variables: None. The functions take the raw valkey-go client (`kv.Ra
 
 | Function | Purpose |
 | -------- | ------- |
-| `NewPublisher(c, app)` | Implements `outbox.Publisher`. One `XADD events.stream:<app> * event <json>` for each payload, in one pipeline. It sets no `MAXLEN`, because retention trims the stream. |
-| `NewGroup(c, GroupConfig)` | One consumer of a consumer group. `GroupConfig` has `App` (the own app), `Stream` (the app of the stream), `Group`, `Consumer` (default `<host>-<random>`), and `StartID` (`$` by default, or `0`). It refuses a group that is not valid for `App`. |
-| `Lag(ctx, c, app, group)` | The age of the oldest message that the group did not acknowledge. 0 if there is none. `ErrNoGroup` if the group does not exist. |
-| `Groups(ctx, c, app)` | The sorted group names of the stream. An empty list if the stream does not exist. |
-| `NewTrimPurger(c, app)` | Implements `retention.Purger`. `XTRIM events.stream:<app> MINID <ms>-0`. |
+| `NewPublisher(c, app, opts...)` | Implements `outbox.Publisher`. One `XADD events.stream:<app> * event <json>` for each payload, in one pipeline. It sets no `MAXLEN`, because retention trims the stream. The option `WithFamily(streams.Audit)` writes to `audit.stream:<app>`. |
+| `NewGroup(c, GroupConfig)` | One consumer of a consumer group. `GroupConfig` has `App` (the own app), `Stream` (the app of the stream), `Family` (default `streams.Events`), `Group`, `Consumer` (default `<host>-<random>`), and `StartID` (`$` by default, or `0`). It refuses a group that is not valid for `App`. |
+| `Lag(ctx, c, app, group)` | The age of the oldest message that the group did not acknowledge. 0 if there is none. `ErrNoGroup` if the group does not exist. It reads the event stream. |
+| `LagFor(ctx, c, family, app, group)` | The same as `Lag` for the stream of a family. |
+| `Groups(ctx, c, app)` | The sorted group names of the stream. An empty list if the stream does not exist. It reads the event stream. |
+| `GroupsFor(ctx, c, family, app)` | The same as `Groups` for the stream of a family. |
+| `NewTrimPurger(c, app, opts...)` | Implements `retention.Purger`. `XTRIM events.stream:<app> MINID <ms>-0`. The option `WithFamily(streams.Audit)` trims the audit stream. |
+| `AuditApps(ctx, c)` | The sorted apps that write an audit stream. See the section "Audit streams". |
 | `ACLSelectors(app)` | The text of the two ACL selectors. It panics if `app` does not match the app name pattern. `NewPublisher` and `NewTrimPurger` also panic for an invalid `app`. |
+| `AuditProducerSelectors(app)`, `AuditReaderSelectors()` | The text of the audit ACL selectors. See the section "Audit streams". |
 
 - `Claim` sends `XAUTOCLAIM` and keeps the returned cursor between calls. The cursor starts again at `0-0` when the scan ends. Then it reads the delivery count of each claimed message with `XPENDING`.
 - `TrimPurger` uses the exact form of `XTRIM` and deletes all entries that are older than the period in one call. It does not use `PurgeParams.Limit`. It also deletes entries that a group still has pending. The consumer counts them as lost. The default period is 3 days. Name the job `event_stream`.
@@ -1557,9 +1566,175 @@ Each service user keeps `~<svc>:*` and gets two selectors. The text is the resul
 - Limit: the ACL cannot isolate consumer groups. A service can acknowledge or claim messages of the group of another service on any stream, and it can delete a consumer of another group. All services are platform code, and they cannot forge events. The handler counter of each group shows unexpected acknowledgements.
 - `containers.ValkeyACLEvents()` adds the two selectors to a test user.
 
+### Audit streams
+
+The audit entries go to `audit.stream:<app>`. The audit service reads them with `NewGroup(c, GroupConfig{App: "audit", Stream: app, Family: streams.Audit, Group: "audit"})` and a consumer with `NeverDrop`. The own app of the audit service is `audit`.
+
+Each service user gets the producer selectors, besides `ACLSelectors`. Only the audit service user gets the reader selectors. The text is the result of the two functions. The deploy files copy it.
+
+```txt
+AuditProducerSelectors("<svc>"):
+(~audit.stream:<svc> +xadd +xtrim)
+(~audit.streams +sadd)
+
+AuditReaderSelectors():
+(~audit.stream:* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream +xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange)
+(~audit.streams +smembers)
+```
+
+- A service writes only its own audit stream. It cannot read any audit stream, and it cannot read the set `audit.streams`.
+- `AuditProducerSelectors` panics if `app` does not match the app name pattern.
+- The install refuses `SCAN` for service users, so the audit service cannot find streams with `SCAN`. An audit publisher adds its app to the set `audit.streams` with `SADD` after its first successful publish in the process. Then it adds the app again after a successful publish when the last add is older than 1 minute, so the set is filled again after Valkey loses it. A failed `SADD` is logged at `warn` level with no data. The publish does not fail, and the publisher tries again after the next publish. The option `WithAuditIndexRefresh` changes the 1 minute for a test. `WithLogger` sets the logger.
+- `AuditApps(ctx, c)` reads the set with `SMEMBERS`. It keeps the members that match the app name pattern and whose stream `audit.stream:<member>` exists (`XINFO STREAM`). It returns them sorted, with a maximum of 1000 (`MaxAuditApps`). If more than 1000 members are valid, it returns the first 1000 and `ErrTooManyAuditApps`. The caller logs the error and uses the list. A forged member names a stream that only its own app can write, so it gives no access. The stream check removes forged members that have no stream.
+- Risk: a service can add many forged members to the set. `AuditApps` drops the members that have no stream, but `SMEMBERS` still reads all members. The memory risk is the same as for the own streams of a service.
+- The trim of an audit stream also removes the entries that the audit service did not read. Use a period that is longer than the longest stop of the audit service. The default is 7 days.
+- `containers.ValkeyACLAuditProducer()` and `containers.ValkeyACLAuditReader()` add the selectors to a test user.
+
 ### Event retention
 
 Add two jobs to the `retention.Runner`, with the default period of 3 days: `outbox` with the table purger of `outbox/postgres`, and `event_stream` with `streamsvk.NewTrimPurger(kv.Raw, app)`. See the startup order for the code. Valkey uses `noeviction`. If the trim stops, `XADD` gets an out of memory error, the relay backs off, and the outbox lag gauge shows the problem.
+
+## audit
+
+Purpose: the producer side of the audit trail. A service writes an audit entry in the same database transaction as its change. A second relay adds the entry to the Valkey stream `audit.stream:<app>`. Only the audit service reads these streams. The package has the entry model, the writer rules, and the ports. It imports no database driver.
+
+Import path: `github.com/techorionai/constellation-platform-go/audit`
+
+Environment variables: None. The service gives `audit.Config` (`App` and `ClientID`) in code. `ClientID` is the client ID of the own service client. It has 1 to 128 characters.
+
+Use:
+
+```go
+// w is audit/postgres.NewWriter(pool, audit.Config{App: "helpdesk", ClientID: clientID}).
+err := tx.WithinTx(ctx, func(ctx context.Context) error {
+	// ... the business change ...
+	return w.Write(ctx, audit.Entry{
+		Action:  "helpdesk:ticket:write",
+		Result:  audit.Success,
+		Target:  &audit.Target{Type: "ticket", ID: "T-1"},
+		Summary: "Ticket created",
+	})
+})
+```
+
+The sample is `ExampleEntryWriter_Write` in `audit/example_test.go`.
+
+### Writer rules
+
+`Write` checks the rules in this order. A broken rule returns an error that wraps a sentinel error, and no row is written. The entries of one call are all written or none is written.
+
+| Order | Rule | Error |
+| ----- | ---- | ----- |
+| 1 | The context has a transaction. | `ErrNoTransaction` |
+| 2 | `Action` is a permission key (`<app>:<resource>:<verb>`) and starts with `<App>:`. | `ErrInvalidAction` |
+| 3 | `Result` is `success`, `denied`, `invalid`, or `failure`. | `ErrInvalidResult` |
+| 4 | A set `Target` has a `Type` that matches `^[a-z][a-z0-9_]{0,63}$` and an `ID` of 1 to 256 characters. | `ErrInvalidTarget` |
+| 5 | A set `Summary` has 1 to 1024 characters. | `ErrInvalidSummary` |
+| 6 | `Details` marshal to JSON of a maximum of 16 KiB. A nil or empty `Details` leaves out `details`. | `ErrInvalidDetails` |
+| 7 | The actor follows the actor rules below. | `ErrInvalidActor` |
+| 8 | The CloudEvent in JSON has no escaped U+0000, because the `jsonb` column rejects it. | `ErrInvalidText` |
+| 9 | The CloudEvent in JSON has a maximum of 64 KiB. | `ErrEntryTooLarge` |
+
+The CloudEvent has `specversion` `1.0`, `id` (a UUIDv7), `source` `/<app>`, `type` `<app>.audit.recorded`, `time` (UTC, milliseconds), `datacontenttype`, the actor attributes, `traceparent` from the span in the context, and `data`. The writer sets the type. The caller does not give it. The audit consumer accepts only types that start with `<stream app>.`.
+
+### Actor rules
+
+- `Entry` has no actor field. The actor is the verified principal in the context (`auth.PrincipalFromContext`), with `act` and `acttype` if the principal has them. A caller cannot replace the verified principal.
+- With no principal in the context, the actor is `outbox.ServiceActor(Config.ClientID)`: `actor` is the client ID and `actortype` is `service`. This is the case for a timer, a consumer, or a command line action. To keep the origin of such an action, put it in `Details`, for example `"origin": "cli"`.
+
+### Request metadata
+
+The writer copies three values from the context into `data`. It leaves out a value that does not agree with the contract. It does not refuse the entry, because a bad header must not make each audited change fail.
+
+| Field | Source | Rule |
+| ----- | ------ | ---- |
+| `requestId` | `requestid.FromContext` | Matches `^[A-Za-z0-9._-]{1,128}$`. |
+| `ipAddress` | `clientinfo.FromContext` | A valid address. The writer removes the zone and unmaps an IPv4-mapped IPv6 address. 1 to 45 characters. |
+| `userAgent` | `clientinfo.FromContext` | 1 to 512 characters of valid UTF-8 with no U+0000. |
+
+### Other rules
+
+- The writer logs nothing and puts no entry data into spans.
+- An entry must have no secret, no token, and no password, in `Summary` and in `Details`.
+- The audit entry is a copy of the data of the change. The change is not the audit entry. A denied or invalid request that has no change can still write an entry in its own transaction.
+
+## audit/postgres
+
+Purpose: the PostgreSQL adapter of the audit outbox. It has the table `platform_audit_outbox`, the inserter, the writer constructor, and the migrations.
+
+Import path: `github.com/techorionai/constellation-platform-go/audit/postgres`
+
+Environment variables: None.
+
+Run the migrations before the own migrations of the service. They have their own migrations table `auditpg.MigrationsTable`:
+
+```go
+migrator, err := migratepg.NewMigrator(db.Pool, auditpg.Migrations(),
+	migratepg.MigratorOptions{MigrationsTable: auditpg.MigrationsTable})
+if err != nil {
+	return err
+}
+_, err = migrate.Run(ctx, migratepg.NewLocker(db.Pool, auditpg.MigrationsTable), migrator,
+	migrate.Options{Name: auditpg.MigrationsTable})
+```
+
+- `NewWriter(pool, cfg)` returns the writer. `NewInserter()` returns the `audit.Inserter`. Both get the transaction with `clients/postgres.TxFromContext`. A write outside a transaction returns `audit.ErrNoTransaction`. The inserter adds all rows of one call with one batch.
+- The table has the same columns and indexes as `platform_outbox`. A later change follows the expand and contract rule.
+- The audit relay uses the same relay as the events, with another table, another publisher, and another name:
+
+```go
+store, err := outboxpg.NewStoreFor(db.Pool, auditpg.Table)
+if err != nil {
+	return err
+}
+pub := streamsvk.NewPublisher(kv.Raw, app, streamsvk.WithFamily(streams.Audit))
+relay, err := outbox.NewRelay(store, pub, outbox.RelayOptions{Name: "audit"})
+```
+
+### Audit retention
+
+Add two jobs to the `retention.Runner`. The default period is 7 days, longer than the 3 days of events. The trim removes pending entries too, so the 7 days give the operator more time to fix a stopped audit service. The audit lag gauge (`constellation.outbox.lag` with `outbox=audit`) shows the problem.
+
+```go
+tablePurger, err := retentionpg.NewTablePurger(db.Pool, retentionpg.TableSpec{
+	Table: auditpg.Table, TimeColumn: "published_at",
+})
+// job audit_outbox: tablePurger
+// job audit_stream: streamsvk.NewTrimPurger(kv.Raw, app, streamsvk.WithFamily(streams.Audit))
+```
+
+The table purger keeps the unpublished rows.
+
+## clientinfo
+
+Purpose: give the client IP address and the user agent of an HTTP request. The audit writer puts them into each entry.
+
+Import path: `github.com/techorionai/constellation-platform-go/clientinfo`
+
+Environment variables: `TRUSTED_PROXIES` is a comma list of CIDR prefixes, for example `10.0.0.0/8,192.168.1.5/32`. The default is empty. Read it with `clientinfo.ConfigFromEnv()`. A bad prefix gives an error that names `TRUSTED_PROXIES`. A service can also put the variable in its own config struct and call `clientinfo.ParseTrustedProxies`.
+
+Use:
+
+```go
+cfg, err := clientinfo.ConfigFromEnv()
+if err != nil {
+	return err
+}
+handler := clientinfo.Middleware(cfg)(mux)
+```
+
+In a handler, `clientinfo.FromContext(ctx)` returns the `Info` (`IP` as `netip.Addr` and `UserAgent`). `clientinfo.ContextWith(ctx, info)` puts an `Info` in a context. A test uses it. The sample is `ExampleMiddleware` in `clientinfo/example_test.go`.
+
+Rules and limits:
+
+- The IP address is the host of `RemoteAddr`.
+- When `RemoteAddr` is in `TrustedProxies`, the middleware reads `X-Forwarded-For` from right to left and takes the first address that is not in `TrustedProxies`. A client cannot forge its address, because only addresses that a trusted proxy added count.
+- A bad `X-Forwarded-For` item makes the middleware ignore the header. The address is then the host of `RemoteAddr`.
+- Before each comparison, the middleware removes the zone and unmaps an IPv4-mapped IPv6 address. This applies to `RemoteAddr` and to each item. Thus `::ffff:10.0.0.5` matches `10.0.0.0/8`.
+- With no trusted proxies, the middleware ignores `X-Forwarded-For`.
+- The user agent is made valid UTF-8 and cut to 512 characters. An empty user agent is not set.
+- An IP address is personal data. The package logs nothing.
+- Put the middleware before the handlers that write audit entries. Set only the addresses of the own proxies in `TRUSTED_PROXIES`. A wrong value lets a client forge its IP address.
 
 ## requestid
 
@@ -2239,6 +2414,7 @@ Rules and limits:
 - `NewDatabase` makes a database `test_<16 hex>` and drops it at cleanup. Tests in one package can share one container.
 - `NewACLUser` uses the rule `containers.ACLRule`. It is the same rule as the sample in the `clients/valkey` section.
 - `NewACLUser` takes options. `containers.ValkeyACLEvents()` adds the two selectors of `streams/valkey.ACLSelectors` for the prefix of the user.
+- `containers.ValkeyACLAuditProducer()` adds the two selectors of `streams/valkey.AuditProducerSelectors` for the prefix of the user. `containers.ValkeyACLAuditReader()` adds the two selectors of `streams/valkey.AuditReaderSelectors`.
 - `Stop(ctx)` stops a container before the cleanup.
 - `AdminURL()`, `Exec`, `Admin(t)`, and `AdminPassword()` give the superuser access for the setup of a test.
 
@@ -2284,7 +2460,7 @@ Rules and limits:
 
 ## resources/test/mock
 
-Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), `transaction.Transactor` (`Transactor`), `secrets.Repository` (`SecretsRepository`), `retention.Purger` (`RetentionPurger`), `retention.Locker` (`RetentionLocker`), `auth.Verifier` (`Verifier`), `auth.TokenSource` (`TokenSource`), `auth.TokenExchanger` (`TokenExchanger`), `auth.ClientAssertion` (`ClientAssertion`), `manifest.Registry` (`ManifestRegistry`), `eventtypes.Registry` (`EventTypeRegistry`), `outbox.Writer` (`OutboxWriter`), `outbox.Inserter` (`OutboxInserter`), `outbox.Store` (`OutboxStore`), `outbox.Publisher` (`OutboxPublisher`), and `streams.Group` (`StreamGroup`).
+Purpose: hold the mocks of ports. The package has mocks of `migrate.Locker`, `migrate.Migrator`, `health.Checker`, `cache.Store` (`CacheStore`), `transaction.Transactor` (`Transactor`), `secrets.Repository` (`SecretsRepository`), `retention.Purger` (`RetentionPurger`), `retention.Locker` (`RetentionLocker`), `auth.Verifier` (`Verifier`), `auth.TokenSource` (`TokenSource`), `auth.TokenExchanger` (`TokenExchanger`), `auth.ClientAssertion` (`ClientAssertion`), `manifest.Registry` (`ManifestRegistry`), `eventtypes.Registry` (`EventTypeRegistry`), `outbox.Writer` (`OutboxWriter`), `outbox.Inserter` (`OutboxInserter`), `outbox.Store` (`OutboxStore`), `outbox.Publisher` (`OutboxPublisher`), `audit.Writer` (`AuditWriter`), `audit.Inserter` (`AuditInserter`), and `streams.Group` (`StreamGroup`).
 
 Import path: `github.com/techorionai/constellation-platform-go/resources/test/mock`
 
