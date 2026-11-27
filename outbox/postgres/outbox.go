@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"regexp"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -75,15 +76,29 @@ func NewWriter(_ *pgxpool.Pool, cfg outbox.Config) (*outbox.EventWriter, error) 
 	return outbox.New(cfg, inserter{})
 }
 
+var identPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
+
 // Store implements outbox.Store.
 type Store struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	table string
 }
 
 var _ outbox.Store = (*Store)(nil)
 
-// NewStore makes the store of the relay.
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+// NewStore makes the store of the relay for the table [Table].
+func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool, table: Table} }
+
+// NewStoreFor makes the store of the relay for another table with the columns
+// of [Table], for example the audit outbox. The name must match
+// ^[a-z_][a-z0-9_]{0,62}$. The function quotes it. An invalid name gives an
+// error that wraps outbox.ErrInvalidConfig.
+func NewStoreFor(pool *pgxpool.Pool, table string) (*Store, error) {
+	if !identPattern.MatchString(table) {
+		return nil, fmt.Errorf("%w: the table name must match %s", outbox.ErrInvalidConfig, identPattern)
+	}
+	return &Store{pool: pool, table: pgx.Identifier{table}.Sanitize()}, nil
+}
 
 // Process locks unpublished rows, calls fn, and marks the rows as published in
 // the same transaction. See outbox.Store.
@@ -99,7 +114,7 @@ func (s *Store) Process(ctx context.Context, limit, maxBytes int, fn func(ctx co
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
 	rows, err := tx.Query(ctx,
-		"SELECT id, event_id::text, payload FROM "+Table+
+		"SELECT id, event_id::text, payload FROM "+s.table+
 			" WHERE published_at IS NULL ORDER BY id LIMIT $1 FOR UPDATE SKIP LOCKED", limit)
 	if err != nil {
 		return 0, false, fmt.Errorf("outbox: select: %w", err)
@@ -141,7 +156,7 @@ func (s *Store) Process(ctx context.Context, limit, maxBytes int, fn func(ctx co
 	for i := range recs {
 		ids[i] = recs[i].ID
 	}
-	if _, err := tx.Exec(ctx, "UPDATE "+Table+" SET published_at = now() WHERE id = ANY($1)", ids); err != nil {
+	if _, err := tx.Exec(ctx, "UPDATE "+s.table+" SET published_at = now() WHERE id = ANY($1)", ids); err != nil {
 		return 0, false, fmt.Errorf("outbox: mark published: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -154,7 +169,7 @@ func (s *Store) Process(ctx context.Context, limit, maxBytes int, fn func(ctx co
 func (s *Store) Lag(ctx context.Context) (time.Duration, error) {
 	var seconds float64
 	err := s.pool.QueryRow(ctx,
-		"SELECT COALESCE(EXTRACT(EPOCH FROM now() - min(created_at)), 0)::float8 FROM "+Table+
+		"SELECT COALESCE(EXTRACT(EPOCH FROM now() - min(created_at)), 0)::float8 FROM "+s.table+
 			" WHERE published_at IS NULL").Scan(&seconds)
 	if err != nil {
 		return 0, fmt.Errorf("outbox: lag: %w", err)

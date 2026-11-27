@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"regexp"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -70,8 +71,17 @@ type Publisher interface {
 	Publish(ctx context.Context, payloads [][]byte) error
 }
 
+// DefaultRelayName is the default of [RelayOptions.Name].
+const DefaultRelayName = "events"
+
+var relayNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+
 // RelayOptions are the settings of the [Relay]. A zero value uses the default.
 type RelayOptions struct {
+	// Name tells two relays in one process apart. It is the value of the
+	// attribute "outbox" of the metrics. Default "events". It must match
+	// ^[a-z][a-z0-9_]{0,31}$. An audit relay uses "audit".
+	Name string
 	// Interval is the wait after an empty batch. Default 1s, minimum 100ms.
 	Interval time.Duration
 	// BatchSize is the maximum number of rows in one batch. Default 100, from 1
@@ -98,6 +108,12 @@ type RelayOptions struct {
 }
 
 func (o RelayOptions) resolve() (RelayOptions, error) {
+	if o.Name == "" {
+		o.Name = DefaultRelayName
+	}
+	if !relayNamePattern.MatchString(o.Name) {
+		return o, fmt.Errorf("%w: Name must match %s", ErrInvalidConfig, relayNamePattern)
+	}
 	if o.Interval == 0 {
 		o.Interval = DefaultInterval
 	}
@@ -148,6 +164,7 @@ type Relay struct {
 
 	published metric.Int64Counter
 	lag       metric.Float64ObservableGauge
+	nameAttr  attribute.KeyValue
 }
 
 // NewRelay checks the options and makes a relay. It returns an error that wraps
@@ -166,6 +183,8 @@ func NewRelay(store Store, pub Publisher, opts RelayOptions) (*Relay, error) {
 		opts:   opts,
 		notify: make(chan struct{}, 1),
 		tracer: opts.TracerProvider.Tracer(scopeName),
+
+		nameAttr: attribute.String("outbox", opts.Name),
 	}
 	m := opts.MeterProvider.Meter(scopeName)
 	r.published, err = m.Int64Counter("constellation.outbox.published", metric.WithUnit("{event}"),
@@ -204,7 +223,7 @@ func (r *Relay) observeLag(ctx context.Context, o metric.Observer) error {
 			r.opts.Logger.WarnContext(ctx, "outbox: cannot read the lag", slog.String("error.type", fmt.Sprintf("%T", rootErr(res.err))))
 			return nil
 		}
-		o.ObserveFloat64(r.lag, res.d.Seconds())
+		o.ObserveFloat64(r.lag, res.d.Seconds(), metric.WithAttributes(r.nameAttr))
 	case <-ctx.Done():
 		r.opts.Logger.WarnContext(context.WithoutCancel(ctx), "outbox: the lag query took too long")
 	}
@@ -298,11 +317,11 @@ func (r *Relay) tick(ctx context.Context) (int, bool, error) {
 		if !publishFailed {
 			outcome, count = "db_error", 1
 		}
-		r.published.Add(mctx, int64(count), metric.WithAttributes(attribute.String("outcome", outcome)))
+		r.published.Add(mctx, int64(count), metric.WithAttributes(r.nameAttr, attribute.String("outcome", outcome)))
 		return 0, false, err
 	}
 	if n > 0 {
-		r.published.Add(mctx, int64(n), metric.WithAttributes(attribute.String("outcome", "ok")))
+		r.published.Add(mctx, int64(n), metric.WithAttributes(r.nameAttr, attribute.String("outcome", "ok")))
 	}
 	return n, full, nil
 }

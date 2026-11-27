@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	valkeygo "github.com/valkey-io/valkey-go"
@@ -39,6 +41,28 @@ func ACLSelectors(app string) string {
 		"+xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange)"
 }
 
+// AuditProducerSelectors returns the two ACL selectors that a service user
+// needs to write its own audit stream: XADD and XTRIM on audit.stream:<app>, and
+// SADD on the set audit.streams. Give them to each service user, besides
+// [ACLSelectors]. They give no read access.
+//
+// AuditProducerSelectors panics if app does not match the app name pattern of
+// [streams.GroupName].
+func AuditProducerSelectors(app string) string {
+	mustApp(app)
+	return "(~" + streams.KeyFor(streams.Audit, app) + " +xadd +xtrim) " +
+		"(~" + streams.AuditIndexKey + " +sadd)"
+}
+
+// AuditReaderSelectors returns the two ACL selectors of the audit service user:
+// it consumes all audit streams and reads the set audit.streams. Give them only
+// to the audit service user.
+func AuditReaderSelectors() string {
+	return "(~" + streams.AuditKeyPrefix + "* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream " +
+		"+xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange) " +
+		"(~" + streams.AuditIndexKey + " +sscan)"
+}
+
 // mustApp panics if app is not a valid app name. The value comes from the
 // configuration of the service and goes into ACL text and key names.
 func mustApp(app string) {
@@ -57,19 +81,82 @@ func isErrPrefix(err error, prefix string) bool {
 	return errors.As(err, &ve) && strings.HasPrefix(ve.Error(), prefix)
 }
 
+// Option changes a [Publisher] or a [TrimPurger].
+type Option func(*options)
+
+type options struct {
+	family       streams.Family
+	indexRefresh time.Duration
+	logger       *slog.Logger
+}
+
+// DefaultAuditIndexRefresh is the time after which an audit publisher adds its
+// app to the audit index again.
+const DefaultAuditIndexRefresh = time.Minute
+
+// WithFamily sets the family of the stream. The default is [streams.Events]. It
+// panics if f is not a known family.
+func WithFamily(f streams.Family) Option {
+	if !f.Valid() {
+		panic(fmt.Errorf("streams: unknown family %d", int(f)))
+	}
+	return func(o *options) { o.family = f }
+}
+
+// WithAuditIndexRefresh sets the time after which an audit publisher adds its
+// app to the audit index again. The default is [DefaultAuditIndexRefresh]. It
+// is for tests.
+func WithAuditIndexRefresh(d time.Duration) Option {
+	return func(o *options) { o.indexRefresh = d }
+}
+
+// WithLogger sets the logger of the publisher. The default is slog.Default().
+func WithLogger(l *slog.Logger) Option {
+	return func(o *options) { o.logger = l }
+}
+
+func resolve(opts []Option) options {
+	o := options{family: streams.Events, indexRefresh: DefaultAuditIndexRefresh}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.logger == nil {
+		o.logger = slog.Default()
+	}
+	return o
+}
+
 // Publisher adds events to the stream of one app. It implements
 // outbox.Publisher.
 type Publisher struct {
-	c   valkeygo.Client
-	key string
+	c      valkeygo.Client
+	key    string
+	app    string
+	family streams.Family
+
+	refresh time.Duration
+	logger  *slog.Logger
+	mu      sync.Mutex
+	lastAdd time.Time
 }
 
-// NewPublisher returns a publisher for events.stream:<app>. It sets no MAXLEN,
-// because the retention job trims the stream. The service user needs the ACL
-// selectors of [ACLSelectors]. It panics if app is not a valid app name.
-func NewPublisher(c valkeygo.Client, app string) *Publisher {
+// NewPublisher returns a publisher for events.stream:<app>, or for
+// audit.stream:<app> with [WithFamily]. It sets no MAXLEN, because the retention
+// job trims the stream. The service user needs the ACL selectors of
+// [ACLSelectors] or [AuditProducerSelectors]. It panics if app is not a valid
+// app name.
+//
+// An audit publisher adds app to the set audit.streams after its first
+// successful publish, and again after a successful publish when the last add is
+// older than one minute. A failed add is logged at warn level with no data. The
+// publish does not fail, and the publisher tries again after the next publish.
+func NewPublisher(c valkeygo.Client, app string, opts ...Option) *Publisher {
 	mustApp(app)
-	return &Publisher{c: c, key: streams.StreamKey(app)}
+	o := resolve(opts)
+	return &Publisher{
+		c: c, key: streams.KeyFor(o.family, app), app: app, family: o.family,
+		refresh: o.indexRefresh, logger: o.logger,
+	}
 }
 
 // Publish sends one XADD for each payload in one pipeline.
@@ -86,7 +173,37 @@ func (p *Publisher) Publish(ctx context.Context, payloads [][]byte) error {
 			return fmt.Errorf("streams: XADD %s: %w", p.key, err)
 		}
 	}
+	if p.family == streams.Audit {
+		p.addToIndex(ctx)
+	}
 	return nil
+}
+
+// addToIndex adds the app to the audit index when the last add is missing or old.
+// It holds the lock only to read and set the time. It sends SADD with no lock, so
+// a slow Valkey does not block other callers. A caller that finds a fresh time
+// does not send SADD. If SADD fails, the time goes back to its old value.
+func (p *Publisher) addToIndex(ctx context.Context) {
+	p.mu.Lock()
+	prev := p.lastAdd
+	if !prev.IsZero() && time.Since(prev) < p.refresh {
+		p.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	p.lastAdd = now
+	p.mu.Unlock()
+
+	err := p.c.Do(ctx, p.c.B().Sadd().Key(streams.AuditIndexKey).Member(p.app).Build()).Error()
+	if err != nil {
+		p.mu.Lock()
+		if p.lastAdd.Equal(now) {
+			p.lastAdd = prev
+		}
+		p.mu.Unlock()
+		p.logger.WarnContext(ctx, "streams: cannot add the app to the audit index",
+			slog.String("error.type", fmt.Sprintf("%T", err)))
+	}
 }
 
 // GroupConfig is the configuration of a [Group].
@@ -99,6 +216,9 @@ type GroupConfig struct {
 	Group string
 	// Consumer is the name of this consumer. The default is <host>-<random>.
 	Consumer string
+	// Family is the family of the stream. The default is [streams.Events]. The
+	// audit service sets [streams.Audit].
+	Family streams.Family
 	// StartID is the first ID of a new group: "$" (new events only, the default)
 	// or "0" (all events in the stream).
 	StartID string
@@ -128,6 +248,9 @@ func NewGroup(c valkeygo.Client, cfg GroupConfig) (*Group, error) {
 	if _, err := streams.GroupName(cfg.Stream, ""); err != nil {
 		return nil, fmt.Errorf("streams: invalid stream app %q: %w", cfg.Stream, err)
 	}
+	if !cfg.Family.Valid() {
+		return nil, fmt.Errorf("%w: unknown stream family %d", streams.ErrInvalidConfig, int(cfg.Family))
+	}
 	if err := streams.ValidGroup(cfg.App, cfg.Group); err != nil {
 		return nil, err
 	}
@@ -147,7 +270,7 @@ func NewGroup(c valkeygo.Client, cfg GroupConfig) (*Group, error) {
 		cfg.Consumer = host + "-" + hex.EncodeToString(b)
 	}
 	return &Group{
-		c: c, app: cfg.App, stream: cfg.Stream, key: streams.StreamKey(cfg.Stream),
+		c: c, app: cfg.App, stream: cfg.Stream, key: streams.KeyFor(cfg.Family, cfg.Stream),
 		group: cfg.Group, consumer: cfg.Consumer, startID: cfg.StartID, cursor: "0-0",
 	}, nil
 }
@@ -322,16 +445,16 @@ func (g *Group) Leave(ctx context.Context) error {
 	return nil
 }
 
-// groupInfos returns the fields of all groups of the stream of app from
+// groupInfos returns the fields of all groups of the stream of app in f from
 // XINFO GROUPS.
-func groupInfos(ctx context.Context, c valkeygo.Client, app string) ([]map[string]valkeygo.ValkeyMessage, error) {
-	res := c.Do(ctx, c.B().Arbitrary("XINFO", "GROUPS").Keys(streams.StreamKey(app)).Build())
+func groupInfos(ctx context.Context, c valkeygo.Client, f streams.Family, app string) ([]map[string]valkeygo.ValkeyMessage, error) {
+	res := c.Do(ctx, c.B().Arbitrary("XINFO", "GROUPS").Keys(streams.KeyFor(f, app)).Build())
 	arr, err := res.ToArray()
 	if err != nil {
 		if isNoKey(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("streams: XINFO GROUPS %s: %w", streams.StreamKey(app), err)
+		return nil, fmt.Errorf("streams: XINFO GROUPS %s: %w", streams.KeyFor(f, app), err)
 	}
 	out := make([]map[string]valkeygo.ValkeyMessage, 0, len(arr))
 	for _, item := range arr {
@@ -347,7 +470,13 @@ func groupInfos(ctx context.Context, c valkeygo.Client, app string) ([]map[strin
 // Groups returns the sorted names of the consumer groups of the stream of app.
 // The list is empty if the stream does not exist.
 func Groups(ctx context.Context, c valkeygo.Client, app string) ([]string, error) {
-	infos, err := groupInfos(ctx, c, app)
+	return GroupsFor(ctx, c, streams.Events, app)
+}
+
+// GroupsFor returns the sorted names of the consumer groups of the stream of app
+// in the family f. The list is empty if the stream does not exist.
+func GroupsFor(ctx context.Context, c valkeygo.Client, f streams.Family, app string) ([]string, error) {
+	infos, err := groupInfos(ctx, c, f, app)
 	if err != nil {
 		return nil, err
 	}
@@ -368,8 +497,13 @@ func Groups(ctx context.Context, c valkeygo.Client, app string) ([]string, error
 // last delivered ID. It returns 0 if there is none, and [ErrNoGroup] if the
 // group does not exist.
 func Lag(ctx context.Context, c valkeygo.Client, app, group string) (time.Duration, error) {
-	key := streams.StreamKey(app)
-	infos, err := groupInfos(ctx, c, app)
+	return LagFor(ctx, c, streams.Events, app, group)
+}
+
+// LagFor is like [Lag] for the stream of app in the family f.
+func LagFor(ctx context.Context, c valkeygo.Client, f streams.Family, app, group string) (time.Duration, error) {
+	key := streams.KeyFor(f, app)
+	infos, err := groupInfos(ctx, c, f, app)
 	if err != nil {
 		return 0, err
 	}
@@ -433,11 +567,12 @@ type TrimPurger struct {
 
 var _ retention.Purger = (*TrimPurger)(nil)
 
-// NewTrimPurger returns a purger for events.stream:<app>. It panics if app is
+// NewTrimPurger returns a purger for events.stream:<app>, or for
+// audit.stream:<app> with [WithFamily]. It panics if app is
 // not a valid app name.
-func NewTrimPurger(c valkeygo.Client, app string) *TrimPurger {
+func NewTrimPurger(c valkeygo.Client, app string, opts ...Option) *TrimPurger {
 	mustApp(app)
-	return &TrimPurger{c: c, key: streams.StreamKey(app)}
+	return &TrimPurger{c: c, key: streams.KeyFor(resolve(opts).family, app)}
 }
 
 // Purge deletes all entries that are older than params.Before with the exact
@@ -463,4 +598,87 @@ func mapString(m map[string]valkeygo.ValkeyMessage, key string) (string, error) 
 func mapInt(m map[string]valkeygo.ValkeyMessage, key string) (int64, error) {
 	v := m[key]
 	return v.AsInt64()
+}
+
+// ErrTooManyAuditApps means that the audit index has more than [MaxAuditApps]
+// valid apps, or more than [MaxAuditMembers] members. [AuditApps] returns the
+// first [MaxAuditApps] apps that it found, with this error.
+var ErrTooManyAuditApps = errors.New("streams: the audit index has too many apps")
+
+// MaxAuditApps is the maximum number of apps that [AuditApps] returns.
+const MaxAuditApps = 1000
+
+// MaxAuditMembers is the maximum number of members that [AuditApps] reads from
+// the set audit.streams. A producer can add forged members. This limit keeps the
+// memory and the time of the audit service small.
+const MaxAuditMembers = 10 * MaxAuditApps
+
+// auditCheckChunk is the number of XINFO STREAM commands in one pipeline.
+const auditCheckChunk = 200
+
+// auditScanCount is the COUNT hint of each SSCAN command.
+const auditScanCount = 500
+
+// AuditApps returns the sorted apps that write an audit stream. It reads the set
+// audit.streams with SSCAN and stops after [MaxAuditMembers] members. It keeps
+// the members that match the app name pattern and whose stream
+// audit.stream:<member> exists. A forged member with no stream is not in the
+// result. If the set has more than [MaxAuditMembers] members, or more than
+// [MaxAuditApps] members are valid, it returns the first [MaxAuditApps] apps and
+// [ErrTooManyAuditApps]. The caller logs the error and uses the list. The user
+// needs [AuditReaderSelectors].
+func AuditApps(ctx context.Context, c valkeygo.Client) ([]string, error) {
+	var members []string
+	truncated := false
+	var cursor uint64
+	for {
+		entry, err := c.Do(ctx, c.B().Sscan().Key(streams.AuditIndexKey).Cursor(cursor).Count(auditScanCount).Build()).AsScanEntry()
+		if err != nil {
+			if valkeygo.IsValkeyNil(err) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("streams: SSCAN %s: %w", streams.AuditIndexKey, err)
+		}
+		members = append(members, entry.Elements...)
+		cursor = entry.Cursor
+		if len(members) >= MaxAuditMembers {
+			truncated = true
+			break
+		}
+		if cursor == 0 {
+			break
+		}
+	}
+	candidates := make([]string, 0, len(members))
+	for _, m := range members {
+		if streams.ValidApp(m) == nil {
+			candidates = append(candidates, m)
+		}
+	}
+	slices.Sort(candidates)
+	candidates = slices.Compact(candidates)
+	apps := make([]string, 0, len(candidates))
+	for start := 0; start < len(candidates); start += auditCheckChunk {
+		chunk := candidates[start:min(start+auditCheckChunk, len(candidates))]
+		cmds := make(valkeygo.Commands, 0, len(chunk))
+		for _, m := range chunk {
+			cmds = append(cmds, c.B().Arbitrary("XINFO", "STREAM").Keys(streams.KeyFor(streams.Audit, m)).Build())
+		}
+		for i, res := range c.DoMulti(ctx, cmds...) {
+			if err := res.Error(); err != nil {
+				if isNoKey(err) {
+					continue
+				}
+				return nil, fmt.Errorf("streams: XINFO STREAM %s: %w", streams.KeyFor(streams.Audit, chunk[i]), err)
+			}
+			apps = append(apps, chunk[i])
+			if len(apps) > MaxAuditApps {
+				return apps[:MaxAuditApps], ErrTooManyAuditApps
+			}
+		}
+	}
+	if truncated {
+		return apps, ErrTooManyAuditApps
+	}
+	return apps, nil
 }

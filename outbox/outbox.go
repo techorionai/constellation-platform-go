@@ -208,7 +208,7 @@ func (w *EventWriter) build(e *Event, traceparent string) (Row, error) {
 	if _, ok := w.types[e.Type]; !ok {
 		return Row{}, fmt.Errorf("%w: %q", ErrUnknownEventType, e.Type)
 	}
-	if err := checkActor(e.Actor); err != nil {
+	if err := CheckActor(e.Actor); err != nil {
 		return Row{}, err
 	}
 	if utf8.RuneCountInString(e.Subject) > maxSubjectLen {
@@ -244,7 +244,7 @@ func (w *EventWriter) build(e *Event, traceparent string) (Row, error) {
 	if err != nil {
 		return Row{}, fmt.Errorf("%w: %w", ErrInvalidData, err)
 	}
-	if hasEscapedNUL(payload) {
+	if HasEscapedNUL(payload) {
 		return Row{}, fmt.Errorf("%w: a value has the character U+0000", ErrInvalidData)
 	}
 	if len(payload) > maxEventBytes {
@@ -253,10 +253,10 @@ func (w *EventWriter) build(e *Event, traceparent string) (Row, error) {
 	return Row{EventID: ce.ID, Type: e.Type, Payload: payload}, nil
 }
 
-// hasEscapedNUL reports whether the JSON text has the escape \u0000 in a
+// HasEscapedNUL reports whether the JSON text has the escape \u0000 in a
 // string. The jsonb column of PostgreSQL rejects this escape. An escaped
 // backslash that is followed by the text u0000 does not count.
-func hasEscapedNUL(b []byte) bool {
+func HasEscapedNUL(b []byte) bool {
 	for i := 0; i < len(b); i++ {
 		if b[i] != '\\' {
 			continue
@@ -269,7 +269,10 @@ func hasEscapedNUL(b []byte) bool {
 	return false
 }
 
-func checkActor(a Actor) error {
+// CheckActor checks the actor limits of the contract. It returns an error that
+// wraps [ErrInvalidActor]. The audit writer uses it too, so the rules stay in one
+// place.
+func CheckActor(a Actor) error {
 	n := utf8.RuneCountInString(a.ID)
 	switch {
 	case n < 1 || n > maxActorLen:

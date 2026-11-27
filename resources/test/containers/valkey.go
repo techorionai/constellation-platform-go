@@ -102,7 +102,9 @@ func (v *ValkeyInstance) Admin(t testing.TB) valkeygo.Client {
 type ACLOption func(*aclOptions)
 
 type aclOptions struct {
-	events bool
+	events        bool
+	auditProducer bool
+	auditReader   bool
 }
 
 // ValkeyACLEvents adds the two ACL selectors for the event streams. The
@@ -110,6 +112,19 @@ type aclOptions struct {
 // user.
 func ValkeyACLEvents() ACLOption {
 	return func(o *aclOptions) { o.events = true }
+}
+
+// ValkeyACLAuditProducer adds the two ACL selectors of an audit producer. The
+// selectors are the text of streams/valkey.AuditProducerSelectors for the prefix
+// of the user.
+func ValkeyACLAuditProducer() ACLOption {
+	return func(o *aclOptions) { o.auditProducer = true }
+}
+
+// ValkeyACLAuditReader adds the two ACL selectors of the audit service
+// (streams/valkey.AuditReaderSelectors).
+func ValkeyACLAuditReader() ACLOption {
+	return func(o *aclOptions) { o.auditReader = true }
 }
 
 var selectorPattern = regexp.MustCompile(`\([^)]*\)`)
@@ -133,6 +148,12 @@ func (v *ValkeyInstance) NewACLUser(t testing.TB, prefix string, opts ...ACLOpti
 	args = append(args, strings.Fields(ACLRule)...)
 	if o.events {
 		args = append(args, selectorPattern.FindAllString(streamsvalkey.ACLSelectors(prefix), -1)...)
+	}
+	if o.auditProducer {
+		args = append(args, selectorPattern.FindAllString(streamsvalkey.AuditProducerSelectors(prefix), -1)...)
+	}
+	if o.auditReader {
+		args = append(args, selectorPattern.FindAllString(streamsvalkey.AuditReaderSelectors(), -1)...)
 	}
 	if err := admin.Do(context.Background(), admin.B().Arbitrary(args[0]).Args(args[1:]...).Build()).Error(); err != nil {
 		t.Fatalf("containers: ACL SETUSER: %v", err)

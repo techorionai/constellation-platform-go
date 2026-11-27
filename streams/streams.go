@@ -28,6 +28,49 @@ var (
 	namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 )
 
+// AuditKeyPrefix is the prefix of each audit stream key. Like [KeyPrefix], it
+// has a ".", so no root pattern ~<svc>:* of a service matches an audit stream
+// key.
+const AuditKeyPrefix = "audit.stream:"
+
+// AuditIndexKey is the key of the Valkey set that lists the apps that write an
+// audit stream. See streams/valkey.AuditApps.
+const AuditIndexKey = "audit.streams"
+
+// Family is a family of streams. The zero value is [Events].
+type Family int
+
+// The families of streams.
+const (
+	// Events is the family of the event streams, events.stream:<app>.
+	Events Family = iota
+	// Audit is the family of the audit streams, audit.stream:<app>. Only the
+	// audit service reads them.
+	Audit
+)
+
+// Prefix returns the key prefix of the family.
+func (f Family) Prefix() string {
+	if f == Audit {
+		return AuditKeyPrefix
+	}
+	return KeyPrefix
+}
+
+// String returns the name of the family.
+func (f Family) String() string {
+	if f == Audit {
+		return "audit"
+	}
+	return "events"
+}
+
+// Valid reports whether f is [Events] or [Audit].
+func (f Family) Valid() bool { return f == Events || f == Audit }
+
+// KeyFor returns the key of the stream of an app in a family.
+func KeyFor(f Family, app string) string { return f.Prefix() + app }
+
 // StreamKey returns the key of the stream of an app.
 func StreamKey(app string) string { return KeyPrefix + app }
 
