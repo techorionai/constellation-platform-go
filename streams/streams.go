@@ -33,8 +33,15 @@ var (
 // key.
 const AuditKeyPrefix = "audit.stream:"
 
-// AuditIndexKey is the key of the Valkey set that lists the apps that write an
-// audit stream. See streams/valkey.AuditApps.
+// AuditAppsKey is the key of the trusted Valkey set that lists the apps that
+// write an audit stream. Only the provisioner (the Valkey admin) writes it. See
+// streams/valkey.RegisterAuditApp and streams/valkey.AuditApps.
+const AuditAppsKey = "audit.apps"
+
+// AuditIndexKey is the key of the old audit index of v0.7.0 and v0.8.0.
+//
+// Deprecated: No function reads or writes this set. Use [AuditAppsKey]. A later
+// minor version deletes this constant.
 const AuditIndexKey = "audit.streams"
 
 // Family is a family of streams. The zero value is [Events].

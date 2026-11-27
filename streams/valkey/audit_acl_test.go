@@ -28,10 +28,10 @@ func TestU11KeyFor(t *testing.T) {
 
 // U12: the text of the audit ACL selectors.
 func TestU12AuditSelectors(t *testing.T) {
-	wantProducer := "(~audit.stream:helpdesk +xadd +xtrim) (~audit.streams +sadd)"
+	wantProducer := "(~audit.stream:helpdesk +xadd +xtrim)"
 	wantReader := "(~audit.stream:* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream " +
 		"+xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange) " +
-		"(~audit.streams +sscan +srem)"
+		"(~audit.apps +sscan)"
 	if got := streamsvalkey.AuditProducerSelectors("helpdesk"); got != wantProducer {
 		t.Errorf("AuditProducerSelectors = %q\nwant %q", got, wantProducer)
 	}
@@ -45,10 +45,15 @@ func TestU12AuditSelectors(t *testing.T) {
 	if got := streamsvalkey.ACLSelectors("helpdesk"); got != wantEvents {
 		t.Errorf("ACLSelectors = %q", got)
 	}
-	for _, s := range []string{wantProducer, wantReader} {
+	for s, want := range map[string]int{wantProducer: 1, wantReader: 2} {
 		// Each selector has one ")" at its end.
-		if n := strings.Count(s, ")"); n != 2 {
-			t.Errorf("selector text has %d ')' characters, want 2: %q", n, s)
+		if n := strings.Count(s, ")"); n != want {
+			t.Errorf("selector text has %d ')' characters, want %d: %q", n, want, s)
+		}
+		for _, bad := range []string{"audit.streams", "+sadd", "+srem"} {
+			if strings.Contains(s, bad) {
+				t.Errorf("selector text has %q: %q", bad, s)
+			}
 		}
 	}
 }
@@ -78,5 +83,16 @@ func TestNewGroupFamily(t *testing.T) {
 	}
 	if _, err := streamsvalkey.NewGroup(nil, streamsvalkey.GroupConfig{App: "audit", Stream: "helpdesk", Group: "audit", Family: streams.Audit}); err != nil {
 		t.Errorf("audit family: %v", err)
+	}
+}
+
+// U14: an invalid app gives an error and no command. A nil client panics if the
+// function sends a command.
+func TestU14RegisterInvalid(t *testing.T) {
+	if err := streamsvalkey.RegisterAuditApp(t.Context(), nil, "Bad-App"); err == nil {
+		t.Error("RegisterAuditApp gave no error")
+	}
+	if err := streamsvalkey.UnregisterAuditApp(t.Context(), nil, "Bad-App"); err == nil {
+		t.Error("UnregisterAuditApp gave no error")
 	}
 }

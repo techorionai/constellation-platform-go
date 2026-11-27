@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -72,7 +71,7 @@ type fixture struct {
 func newFixture(t *testing.T, pg *containers.PostgresInstance, vk *containers.ValkeyInstance) fixture {
 	t.Helper()
 	admin := vk.Admin(t)
-	err := admin.Do(t.Context(), admin.B().Del().Key(streams.KeyFor(streams.Events, app), streams.KeyFor(streams.Audit, app), streams.AuditIndexKey).Build()).Error()
+	err := admin.Do(t.Context(), admin.B().Del().Key(streams.KeyFor(streams.Events, app), streams.KeyFor(streams.Audit, app), streams.AuditAppsKey, streams.AuditIndexKey).Build()).Error() //nolint:staticcheck // the test uses the old set
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,9 +294,11 @@ func TestIntegration(t *testing.T) {
 		if evType != eventType || auType != "helpdesk.audit.recorded" {
 			t.Errorf("types = %q, %q", evType, auType)
 		}
-		members, err := admin.Do(t.Context(), admin.B().Smembers().Key(streams.AuditIndexKey).Build()).AsStrSlice()
-		if err != nil || !slices.Equal(members, []string{app}) {
-			t.Errorf("audit.streams = %v, err = %v", members, err)
+		for _, key := range []string{streams.AuditAppsKey, streams.AuditIndexKey} { //nolint:staticcheck // the test checks the old set
+			n, err := admin.Do(t.Context(), admin.B().Exists().Key(key).Build()).AsInt64()
+			if err != nil || n != 0 {
+				t.Errorf("EXISTS %s = %d, err = %v, want 0", key, n, err)
+			}
 		}
 	})
 
@@ -388,10 +389,11 @@ func TestIntegration(t *testing.T) {
 		}{
 			{"XADD own", []string{"XADD", "audit.stream:helpdesk", "*", "event", "{}"}, false},
 			{"XADD other", []string{"XADD", "audit.stream:crm", "*", "event", "{}"}, true},
-			{"SADD", []string{"SADD", "audit.streams", "helpdesk"}, false},
+			{"SADD audit.apps", []string{"SADD", "audit.apps", "helpdesk"}, true},
+			{"SREM audit.apps", []string{"SREM", "audit.apps", "helpdesk"}, true},
+			{"SSCAN audit.apps", []string{"SSCAN", "audit.apps", "0"}, true},
+			{"SADD audit.streams", []string{"SADD", "audit.streams", "helpdesk"}, true},
 			{"XREADGROUP", []string{"XREADGROUP", "GROUP", "g", "c", "STREAMS", "audit.stream:helpdesk", ">"}, true},
-			{"SSCAN", []string{"SSCAN", "audit.streams", "0"}, true},
-			{"SREM", []string{"SREM", "audit.streams", "helpdesk"}, true},
 		}
 		for _, ch := range checks {
 			err := do(c, ch.args...)
@@ -421,10 +423,11 @@ func TestIntegration(t *testing.T) {
 		}{
 			{"XREADGROUP", []string{"XREADGROUP", "GROUP", "audit", "c", "STREAMS", "audit.stream:helpdesk", ">"}, false},
 			{"XACK", []string{"XACK", "audit.stream:helpdesk", "audit", "0-1"}, false},
-			{"SSCAN", []string{"SSCAN", "audit.streams", "0"}, false},
+			{"SSCAN audit.apps", []string{"SSCAN", "audit.apps", "0"}, false},
 			{"XADD", []string{"XADD", "audit.stream:helpdesk", "*", "event", "{}"}, true},
-			{"SADD", []string{"SADD", "audit.streams", "x"}, true},
-			{"SREM", []string{"SREM", "audit.streams", "x"}, false},
+			{"SADD audit.apps", []string{"SADD", "audit.apps", "x"}, true},
+			{"SREM audit.apps", []string{"SREM", "audit.apps", "x"}, true},
+			{"SSCAN audit.streams", []string{"SSCAN", "audit.streams", "0"}, true},
 		}
 		for _, ch := range checks {
 			err := do(c, ch.args...)
@@ -434,10 +437,10 @@ func TestIntegration(t *testing.T) {
 		}
 	})
 
-	// I7: AuditApps deletes the members that fail the pattern or have no stream.
+	// I7: AuditApps reads the registered apps. It deletes no member.
 	t.Run("I7_audit_apps", func(t *testing.T) {
 		admin := vk.Admin(t)
-		if err := do(admin, "DEL", streams.AuditIndexKey); err != nil {
+		if err := do(admin, "DEL", streams.AuditAppsKey); err != nil {
 			t.Fatal(err)
 		}
 		for _, a := range []string{"helpdesk", "crm", "Bad-App"} {
@@ -445,7 +448,7 @@ func TestIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if err := do(admin, "SADD", streams.AuditIndexKey, "helpdesk", "crm", "Bad-App", "a000"); err != nil {
+		if err := do(admin, "SADD", streams.AuditAppsKey, "helpdesk", "crm", "Bad-App", "a000"); err != nil {
 			t.Fatal(err)
 		}
 		reader, _ := newClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
@@ -453,15 +456,15 @@ func TestIntegration(t *testing.T) {
 		if err != nil || !slices.Equal(apps, []string{"crm", "helpdesk"}) {
 			t.Fatalf("AuditApps = %v, err = %v", apps, err)
 		}
-		if got := containers.AuditIndexMembers(t, admin); !slices.Equal(got, []string{"crm", "helpdesk"}) {
-			t.Errorf("set = %v, want [crm helpdesk]", got)
+		if got := containers.AuditIndexMembers(t, admin); len(got) != 4 {
+			t.Errorf("set = %v, want the 4 members", got)
 		}
 	})
 
-	// I7b: more than 1000 valid members with a stream. No member is deleted.
+	// I7b: more than 1000 registered apps with a stream. No member is deleted.
 	t.Run("I7b_too_many_apps", func(t *testing.T) {
 		admin := vk.Admin(t)
-		if err := do(admin, "DEL", streams.AuditIndexKey); err != nil {
+		if err := do(admin, "DEL", streams.AuditAppsKey); err != nil {
 			t.Fatal(err)
 		}
 		list := make([]string, 0, 1001)
@@ -472,7 +475,7 @@ func TestIntegration(t *testing.T) {
 			}
 			list = append(list, a)
 		}
-		if err := do(admin, append([]string{"SADD", streams.AuditIndexKey}, list...)...); err != nil {
+		if err := do(admin, append([]string{"SADD", streams.AuditAppsKey}, list...)...); err != nil {
 			t.Fatal(err)
 		}
 		reader, _ := newClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
@@ -482,48 +485,6 @@ func TestIntegration(t *testing.T) {
 		}
 		if got := containers.AuditIndexMembers(t, admin); len(got) != 1001 {
 			t.Errorf("set has %d members, want 1001", len(got))
-		}
-	})
-
-	// I7c: forged members do not count. The call deletes them.
-	t.Run("I7c_forged_members_deleted", func(t *testing.T) {
-		admin := vk.Admin(t)
-		containers.SeedAuditIndex(t, admin, 12000, "helpdesk", "crm")
-		reader, _ := newClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
-		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
-		if err != nil || !slices.Equal(apps, []string{"crm", "helpdesk"}) {
-			t.Fatalf("AuditApps = %v, err = %v", apps, err)
-		}
-		if got := containers.AuditIndexMembers(t, admin); !slices.Equal(got, []string{"crm", "helpdesk"}) {
-			t.Errorf("set = %v, want [crm helpdesk]", got)
-		}
-	})
-
-	// I7d: a reader without +srem. The call works and the members stay.
-	t.Run("I7d_reader_without_srem", func(t *testing.T) {
-		admin := vk.Admin(t)
-		containers.SeedAuditIndex(t, admin, 3000, "helpdesk", "crm")
-		user, password := vk.NewACLUser(t, "auditold", containers.ValkeyACLEvents())
-		old := "(~audit.stream:* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream " +
-			"+xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange) (~audit.streams +sscan)"
-		args := []string{"ACL", "SETUSER", user}
-		args = append(args, regexp.MustCompile(`\([^)]*\)`).FindAllString(old, -1)...)
-		if err := do(admin, args...); err != nil {
-			t.Fatal(err)
-		}
-		reader, err := valkeygo.NewClient(valkeygo.ClientOption{
-			InitAddress: []string{vk.Address()}, Username: user, Password: password.Reveal(), DisableCache: true,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(reader.Close)
-		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
-		if err != nil || !slices.Equal(apps, []string{"crm", "helpdesk"}) {
-			t.Fatalf("AuditApps = %v, err = %v", apps, err)
-		}
-		if got := containers.AuditIndexMembers(t, admin); len(got) != 3002 {
-			t.Errorf("set has %d members, want 3002", len(got))
 		}
 	})
 
@@ -579,92 +540,36 @@ func TestIntegration(t *testing.T) {
 		}
 	})
 
-	// I9: the audit index refresh and a failed SADD.
-	t.Run("I9_index_refresh", func(t *testing.T) {
+	// I9: Publish sends no index command, also with WithAuditIndexRefresh(0).
+	t.Run("I9_no_index_command", func(t *testing.T) {
 		admin := vk.Admin(t)
-		if err := do(admin, "DEL", streams.AuditIndexKey, "audit.stream:helpdesk"); err != nil {
+		if err := do(admin, "DEL", streams.AuditAppsKey, streams.AuditIndexKey, "audit.stream:helpdesk"); err != nil { //nolint:staticcheck // the test checks the old set
 			t.Fatal(err)
 		}
-		c, user := newClient(t, vk, app, containers.ValkeyACLEvents(), containers.ValkeyACLAuditProducer())
+		c, _ := newClient(t, vk, app, containers.ValkeyACLEvents(), containers.ValkeyACLAuditProducer())
 		var logs lockedBuffer
 		pub := streamsvalkey.NewPublisher(c, app, streamsvalkey.WithFamily(streams.Audit),
-			streamsvalkey.WithAuditIndexRefresh(100*time.Millisecond),
-			streamsvalkey.WithLogger(slog.New(slog.NewJSONHandler(&logs, nil))))
+			streamsvalkey.WithAuditIndexRefresh(0),                              //nolint:staticcheck // I9 tests the deprecated option
+			streamsvalkey.WithLogger(slog.New(slog.NewJSONHandler(&logs, nil)))) //nolint:staticcheck // I9 tests the deprecated option
 		payload := [][]byte{[]byte(`{"id":"secret-payload"}`)}
-		inIndex := func() bool {
-			ok, err := admin.Do(t.Context(), admin.B().Sismember().Key(streams.AuditIndexKey).Member(app).Build()).AsBool()
-			return err == nil && ok
-		}
-		if err := pub.Publish(t.Context(), payload); err != nil {
-			t.Fatal(err)
-		}
-		if !inIndex() {
-			t.Fatal("the app is not in the index after the first publish")
-		}
-		if err := do(admin, "DEL", streams.AuditIndexKey); err != nil {
-			t.Fatal(err)
-		}
-		// Publish until the refresh time has passed and the app is in the index.
-		waitFor(t, "the index refresh", 10*time.Second, func() bool {
+		for range 2 {
 			if err := pub.Publish(t.Context(), payload); err != nil {
 				t.Fatal(err)
 			}
-			return inIndex()
-		})
-
-		// Remove the SADD permission.
-		setACL := func(selectors ...string) {
-			t.Helper()
-			args := append([]string{"ACL", "SETUSER", user, "clearselectors"}, selectors...)
-			if err := do(admin, args...); err != nil {
-				t.Fatal(err)
+		}
+		if got := streamIDs(t, admin, "audit.stream:helpdesk"); len(got) != 2 {
+			t.Errorf("stream entries = %v, want 2", got)
+		}
+		for _, key := range []string{streams.AuditAppsKey, streams.AuditIndexKey} { //nolint:staticcheck // the test checks the old set
+			n, err := admin.Do(t.Context(), admin.B().Exists().Key(key).Build()).AsInt64()
+			if err != nil || n != 0 {
+				t.Errorf("EXISTS %s = %d, err = %v, want 0", key, n, err)
 			}
 		}
-		// The selectors come from AuditProducerSelectors. The first one is the
-		// stream permission and the second one is the SADD permission.
-		sel := splitSelectors(streamsvalkey.AuditProducerSelectors(app))
-		setACL(sel[0])
-		if err := do(admin, "DEL", streams.AuditIndexKey); err != nil {
-			t.Fatal(err)
+		if strings.Contains(logs.String(), `"level":"WARN"`) {
+			t.Errorf("warn record: %s", logs.String())
 		}
-		// Publish until the refresh time has passed and SADD fails with a warn log.
-		waitFor(t, "the warn log", 10*time.Second, func() bool {
-			if err := pub.Publish(t.Context(), payload); err != nil {
-				t.Fatalf("publish with no SADD permission: %v", err)
-			}
-			return strings.Contains(logs.String(), `"level":"WARN"`)
-		})
-		for _, bad := range []string{"secret-payload", "helpdesk"} {
-			if strings.Contains(logs.String(), bad) {
-				t.Errorf("the log has %q: %s", bad, logs.String())
-			}
-		}
-		if inIndex() {
-			t.Fatal("the app is in the index with no permission")
-		}
-		setACL(sel...)
-		waitFor(t, "the index after the permission returned", 10*time.Second, func() bool {
-			if err := pub.Publish(t.Context(), payload); err != nil {
-				t.Fatal(err)
-			}
-			return inIndex()
-		})
 	})
-}
-
-// splitSelectors splits the text of ACL selectors, for example "(a) (b)", into
-// one text for each selector.
-func splitSelectors(s string) []string {
-	parts := strings.Split(s, ") (")
-	for i := range parts {
-		if i > 0 {
-			parts[i] = "(" + parts[i]
-		}
-		if i < len(parts)-1 {
-			parts[i] += ")"
-		}
-	}
-	return parts
 }
 
 type lockedBuffer struct {
