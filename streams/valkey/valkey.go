@@ -55,12 +55,14 @@ func AuditProducerSelectors(app string) string {
 }
 
 // AuditReaderSelectors returns the two ACL selectors of the audit service user:
-// it consumes all audit streams and reads the set audit.streams. Give them only
-// to the audit service user.
+// it consumes all audit streams, reads the set audit.streams with SSCAN, and
+// removes members from it with SREM. [AuditApps] removes the members that fail
+// the app name pattern or have no stream. Give the selectors only to the audit
+// service user.
 func AuditReaderSelectors() string {
 	return "(~" + streams.AuditKeyPrefix + "* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream " +
 		"+xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange) " +
-		"(~" + streams.AuditIndexKey + " +sscan)"
+		"(~" + streams.AuditIndexKey + " +sscan +srem)"
 }
 
 // mustApp panics if app is not a valid app name. The value comes from the
@@ -601,17 +603,38 @@ func mapInt(m map[string]valkeygo.ValkeyMessage, key string) (int64, error) {
 }
 
 // ErrTooManyAuditApps means that the audit index has more than [MaxAuditApps]
-// valid apps, or more than [MaxAuditMembers] members. [AuditApps] returns the
-// first [MaxAuditApps] apps that it found, with this error.
+// apps with a stream, or that [AuditApps] read [MaxAuditMembers] members and the
+// set has more. [AuditApps] returns the apps that it found (a maximum of
+// [MaxAuditApps]) with this error.
 var ErrTooManyAuditApps = errors.New("streams: the audit index has too many apps")
 
 // MaxAuditApps is the maximum number of apps that [AuditApps] returns.
 const MaxAuditApps = 1000
 
-// MaxAuditMembers is the maximum number of members that [AuditApps] reads from
-// the set audit.streams. A producer can add forged members. This limit keeps the
-// memory and the time of the audit service small.
-const MaxAuditMembers = 10 * MaxAuditApps
+// MaxAuditMembers is the maximum number of members that one call of
+// [AuditApps] reads from the set audit.streams. Each member that the scan reads
+// counts, also a member that [AuditApps] deletes. The limit keeps the work of
+// one call small.
+const MaxAuditMembers = 1000 * MaxAuditApps
+
+// maxAuditMembersNoSrem is the maximum number of members that one call reads
+// after the first SREM error with NOPERM. A reader without +srem cannot delete
+// the members, so a large limit would make each call read the same members
+// again.
+const maxAuditMembersNoSrem = 10 * MaxAuditApps
+
+// auditOptions holds the limits and the test hooks of one call. [AuditApps] uses
+// the defaults. Only a test uses other values.
+type auditOptions struct {
+	memberLimit int
+	noSremLimit int
+	beforeSrem  func()
+	secondCheck func()
+}
+
+func defaultAuditOptions() auditOptions {
+	return auditOptions{memberLimit: MaxAuditMembers, noSremLimit: maxAuditMembersNoSrem}
+}
 
 // auditCheckChunk is the number of XINFO STREAM commands in one pipeline.
 const auditCheckChunk = 200
@@ -620,16 +643,38 @@ const auditCheckChunk = 200
 const auditScanCount = 500
 
 // AuditApps returns the sorted apps that write an audit stream. It reads the set
-// audit.streams with SSCAN and stops after [MaxAuditMembers] members. It keeps
-// the members that match the app name pattern and whose stream
-// audit.stream:<member> exists. A forged member with no stream is not in the
-// result. If the set has more than [MaxAuditMembers] members, or more than
-// [MaxAuditApps] members are valid, it returns the first [MaxAuditApps] apps and
-// [ErrTooManyAuditApps]. The caller logs the error and uses the list. The user
-// needs [AuditReaderSelectors].
+// audit.streams with SSCAN. Only a member that matches the app name pattern and
+// whose stream audit.stream:<member> exists (XINFO STREAM) counts as an app. For
+// each page, it deletes the members that fail the pattern or have no stream with
+// one SREM. Then it checks the deleted members that match the pattern one more
+// time, because an app can publish between the check and the delete. A member
+// whose stream exists then is in the result. The publisher sends XADD before
+// SADD, so a real app is in the result, or it stays in the set. If the SREM
+// deletes the member of an app that publishes in the race, the app is in the
+// result of this call, and the publisher adds the member again at its next index
+// refresh.
+//
+// A deleted member does not count against [MaxAuditApps]. Each member that the
+// scan reads counts against [MaxAuditMembers]. If more than [MaxAuditApps]
+// members have a stream, or the scan reaches [MaxAuditMembers] and the set has
+// more, it returns the apps that it found (a maximum of [MaxAuditApps]) and
+// [ErrTooManyAuditApps]. The caller logs the error and uses the list.
+//
+// An SREM error with NOPERM does not stop the call. The user has no +srem, so
+// the members stay in the set. The call writes one warning to the default
+// logger, and it limits the rest of the scan to 10000 members in total. Then it
+// returns [ErrTooManyAuditApps] if the set has more members. The user needs
+// [AuditReaderSelectors]. Any other error of SREM, for example a connection error
+// or a cancelled context, stops the call and the call returns it.
 func AuditApps(ctx context.Context, c valkeygo.Client) ([]string, error) {
-	var members []string
+	return auditApps(ctx, c, defaultAuditOptions())
+}
+
+func auditApps(ctx context.Context, c valkeygo.Client, opts auditOptions) ([]string, error) {
+	var apps []string
 	truncated := false
+	warned := false
+	read := 0
 	var cursor uint64
 	for {
 		entry, err := c.Do(ctx, c.B().Sscan().Key(streams.AuditIndexKey).Cursor(cursor).Count(auditScanCount).Build()).AsScanEntry()
@@ -639,27 +684,103 @@ func AuditApps(ctx context.Context, c valkeygo.Client) ([]string, error) {
 			}
 			return nil, fmt.Errorf("streams: SSCAN %s: %w", streams.AuditIndexKey, err)
 		}
-		members = append(members, entry.Elements...)
 		cursor = entry.Cursor
-		if len(members) >= MaxAuditMembers {
-			truncated = true
-			break
+		page := entry.Elements
+		if read >= opts.memberLimit {
+			// The scan has read all that it may read. SSCAN can return an empty page
+			// with a cursor that is not zero, so only a member proves that the set has more.
+			if len(page) > 0 {
+				truncated = true
+				break
+			}
+			if cursor == 0 {
+				break
+			}
+			continue
 		}
-		if cursor == 0 {
+		if room := opts.memberLimit - read; len(page) > room {
+			page = page[:room]
+			truncated = true
+		}
+		read += len(page)
+		found, sremDenied, err := auditPage(ctx, c, page, opts)
+		if err != nil {
+			return nil, err
+		}
+		apps = append(apps, found...)
+		if sremDenied && !warned {
+			warned = true
+			slog.WarnContext(ctx, "streams: the audit reader has no SREM permission, "+
+				"the scan does not delete members and stops at max_members",
+				slog.String("key", streams.AuditIndexKey), slog.Int("max_members", opts.noSremLimit))
+		}
+		if sremDenied {
+			opts.memberLimit = min(opts.memberLimit, opts.noSremLimit)
+		}
+		if truncated || cursor == 0 {
 			break
 		}
 	}
-	candidates := make([]string, 0, len(members))
-	for _, m := range members {
+	slices.Sort(apps)
+	apps = slices.Compact(apps)
+	if len(apps) > MaxAuditApps {
+		return apps[:MaxAuditApps], ErrTooManyAuditApps
+	}
+	if truncated {
+		return apps, ErrTooManyAuditApps
+	}
+	return apps, nil
+}
+
+// auditPage checks the members of one SSCAN page, deletes the members that fail
+// the pattern or have no stream, and returns the apps that have a stream.
+// sremDenied is true if the SREM gave NOPERM. Any other error of SREM is an error
+// of the call.
+func auditPage(ctx context.Context, c valkeygo.Client, page []string, opts auditOptions) (found []string, sremDenied bool, err error) {
+	var remove, candidates []string
+	for _, m := range page {
 		if streams.ValidApp(m) == nil {
 			candidates = append(candidates, m)
+		} else {
+			remove = append(remove, m)
 		}
 	}
-	slices.Sort(candidates)
-	candidates = slices.Compact(candidates)
-	apps := make([]string, 0, len(candidates))
-	for start := 0; start < len(candidates); start += auditCheckChunk {
-		chunk := candidates[start:min(start+auditCheckChunk, len(candidates))]
+	found, missing, err := auditHasStream(ctx, c, candidates)
+	if err != nil {
+		return nil, false, err
+	}
+	remove = append(remove, missing...)
+	if len(remove) == 0 {
+		return found, false, nil
+	}
+	if opts.beforeSrem != nil {
+		opts.beforeSrem()
+	}
+	if err := c.Do(ctx, c.B().Srem().Key(streams.AuditIndexKey).Member(remove...).Build()).Error(); err != nil {
+		if isErrPrefix(err, "NOPERM") {
+			// The members stay in the set. The next call examines them again.
+			return found, true, nil
+		}
+		return nil, false, fmt.Errorf("streams: SREM %s: %w", streams.AuditIndexKey, err)
+	}
+	if len(missing) > 0 {
+		if opts.secondCheck != nil {
+			opts.secondCheck()
+		}
+		again, _, err := auditHasStream(ctx, c, missing)
+		if err != nil {
+			return nil, false, err
+		}
+		found = append(found, again...)
+	}
+	return found, false, nil
+}
+
+// auditHasStream sends XINFO STREAM for each member. It returns the members with
+// a stream and the members with no stream.
+func auditHasStream(ctx context.Context, c valkeygo.Client, members []string) (exists, missing []string, err error) {
+	for start := 0; start < len(members); start += auditCheckChunk {
+		chunk := members[start:min(start+auditCheckChunk, len(members))]
 		cmds := make(valkeygo.Commands, 0, len(chunk))
 		for _, m := range chunk {
 			cmds = append(cmds, c.B().Arbitrary("XINFO", "STREAM").Keys(streams.KeyFor(streams.Audit, m)).Build())
@@ -667,18 +788,13 @@ func AuditApps(ctx context.Context, c valkeygo.Client) ([]string, error) {
 		for i, res := range c.DoMulti(ctx, cmds...) {
 			if err := res.Error(); err != nil {
 				if isNoKey(err) {
+					missing = append(missing, chunk[i])
 					continue
 				}
-				return nil, fmt.Errorf("streams: XINFO STREAM %s: %w", streams.KeyFor(streams.Audit, chunk[i]), err)
+				return nil, nil, fmt.Errorf("streams: XINFO STREAM %s: %w", streams.KeyFor(streams.Audit, chunk[i]), err)
 			}
-			apps = append(apps, chunk[i])
-			if len(apps) > MaxAuditApps {
-				return apps[:MaxAuditApps], ErrTooManyAuditApps
-			}
+			exists = append(exists, chunk[i])
 		}
 	}
-	if truncated {
-		return apps, ErrTooManyAuditApps
-	}
-	return apps, nil
+	return exists, missing, nil
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -390,6 +391,7 @@ func TestIntegration(t *testing.T) {
 			{"SADD", []string{"SADD", "audit.streams", "helpdesk"}, false},
 			{"XREADGROUP", []string{"XREADGROUP", "GROUP", "g", "c", "STREAMS", "audit.stream:helpdesk", ">"}, true},
 			{"SSCAN", []string{"SSCAN", "audit.streams", "0"}, true},
+			{"SREM", []string{"SREM", "audit.streams", "helpdesk"}, true},
 		}
 		for _, ch := range checks {
 			err := do(c, ch.args...)
@@ -422,6 +424,7 @@ func TestIntegration(t *testing.T) {
 			{"SSCAN", []string{"SSCAN", "audit.streams", "0"}, false},
 			{"XADD", []string{"XADD", "audit.stream:helpdesk", "*", "event", "{}"}, true},
 			{"SADD", []string{"SADD", "audit.streams", "x"}, true},
+			{"SREM", []string{"SREM", "audit.streams", "x"}, false},
 		}
 		for _, ch := range checks {
 			err := do(c, ch.args...)
@@ -431,13 +434,13 @@ func TestIntegration(t *testing.T) {
 		}
 	})
 
-	// I7: AuditApps.
+	// I7: AuditApps deletes the members that fail the pattern or have no stream.
 	t.Run("I7_audit_apps", func(t *testing.T) {
 		admin := vk.Admin(t)
 		if err := do(admin, "DEL", streams.AuditIndexKey); err != nil {
 			t.Fatal(err)
 		}
-		for _, a := range []string{"helpdesk", "crm"} {
+		for _, a := range []string{"helpdesk", "crm", "Bad-App"} {
 			if err := do(admin, "XADD", "audit.stream:"+a, "*", "event", "{}"); err != nil {
 				t.Fatal(err)
 			}
@@ -445,52 +448,82 @@ func TestIntegration(t *testing.T) {
 		if err := do(admin, "SADD", streams.AuditIndexKey, "helpdesk", "crm", "Bad-App", "a000"); err != nil {
 			t.Fatal(err)
 		}
-		// A stream of an invalid member name exists, but the member is dropped.
-		if err := do(admin, "XADD", "audit.stream:Bad-App", "*", "event", "{}"); err != nil {
-			t.Fatal(err)
-		}
 		reader, _ := newClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
 		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
 		if err != nil || !slices.Equal(apps, []string{"crm", "helpdesk"}) {
 			t.Fatalf("AuditApps = %v, err = %v", apps, err)
 		}
+		if got := containers.AuditIndexMembers(t, admin); !slices.Equal(got, []string{"crm", "helpdesk"}) {
+			t.Errorf("set = %v, want [crm helpdesk]", got)
+		}
+	})
 
-		// More than 1000 valid members.
+	// I7b: more than 1000 valid members with a stream. No member is deleted.
+	t.Run("I7b_too_many_apps", func(t *testing.T) {
+		admin := vk.Admin(t)
 		if err := do(admin, "DEL", streams.AuditIndexKey); err != nil {
 			t.Fatal(err)
 		}
-		members := make([]string, 0, 1001)
+		list := make([]string, 0, 1001)
 		for i := range 1001 {
 			a := fmt.Sprintf("app%04d", i)
 			if err := do(admin, "XADD", "audit.stream:"+a, "*", "event", "{}"); err != nil {
 				t.Fatal(err)
 			}
-			members = append(members, a)
+			list = append(list, a)
 		}
-		if err := do(admin, append([]string{"SADD", streams.AuditIndexKey}, members...)...); err != nil {
+		if err := do(admin, append([]string{"SADD", streams.AuditIndexKey}, list...)...); err != nil {
 			t.Fatal(err)
 		}
-		apps, err = streamsvalkey.AuditApps(t.Context(), reader)
+		reader, _ := newClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
+		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
 		if !errors.Is(err, streamsvalkey.ErrTooManyAuditApps) || len(apps) != 1000 || !slices.IsSorted(apps) || apps[0] != "app0000" || apps[999] != "app0999" {
 			t.Fatalf("AuditApps: len = %d, err = %v", len(apps), err)
 		}
+		if got := containers.AuditIndexMembers(t, admin); len(got) != 1001 {
+			t.Errorf("set has %d members, want 1001", len(got))
+		}
+	})
 
-		// A set with more than MaxAuditMembers forged members: the read stops.
-		if err := do(admin, "DEL", streams.AuditIndexKey); err != nil {
+	// I7c: forged members do not count. The call deletes them.
+	t.Run("I7c_forged_members_deleted", func(t *testing.T) {
+		admin := vk.Admin(t)
+		containers.SeedAuditIndex(t, admin, 12000, "helpdesk", "crm")
+		reader, _ := newClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
+		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
+		if err != nil || !slices.Equal(apps, []string{"crm", "helpdesk"}) {
+			t.Fatalf("AuditApps = %v, err = %v", apps, err)
+		}
+		if got := containers.AuditIndexMembers(t, admin); !slices.Equal(got, []string{"crm", "helpdesk"}) {
+			t.Errorf("set = %v, want [crm helpdesk]", got)
+		}
+	})
+
+	// I7d: a reader without +srem. The call works and the members stay.
+	t.Run("I7d_reader_without_srem", func(t *testing.T) {
+		admin := vk.Admin(t)
+		containers.SeedAuditIndex(t, admin, 3000, "helpdesk", "crm")
+		user, password := vk.NewACLUser(t, "auditold", containers.ValkeyACLEvents())
+		old := "(~audit.stream:* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream " +
+			"+xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange) (~audit.streams +sscan)"
+		args := []string{"ACL", "SETUSER", user}
+		args = append(args, regexp.MustCompile(`\([^)]*\)`).FindAllString(old, -1)...)
+		if err := do(admin, args...); err != nil {
 			t.Fatal(err)
 		}
-		for batch := range 3 {
-			forged := []string{"SADD", streams.AuditIndexKey}
-			for i := range 4000 {
-				forged = append(forged, fmt.Sprintf("forged%d-%05d", batch, i))
-			}
-			if err := do(admin, forged...); err != nil {
-				t.Fatal(err)
-			}
+		reader, err := valkeygo.NewClient(valkeygo.ClientOption{
+			InitAddress: []string{vk.Address()}, Username: user, Password: password.Reveal(), DisableCache: true,
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-		apps, err = streamsvalkey.AuditApps(t.Context(), reader)
-		if !errors.Is(err, streamsvalkey.ErrTooManyAuditApps) || len(apps) != 0 {
-			t.Fatalf("AuditApps with forged members: apps = %v, err = %v", apps, err)
+		t.Cleanup(reader.Close)
+		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
+		if err != nil || !slices.Equal(apps, []string{"crm", "helpdesk"}) {
+			t.Fatalf("AuditApps = %v, err = %v", apps, err)
+		}
+		if got := containers.AuditIndexMembers(t, admin); len(got) != 3002 {
+			t.Errorf("set has %d members, want 3002", len(got))
 		}
 	})
 
