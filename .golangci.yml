@@ -31,7 +31,9 @@ linters:
             - "**/cache/*.go"
             - "**/transaction/*.go"
             - "**/outbox/*.go"
+            - "**/audit/*.go"
             - "**/streams/*.go"
+            - "**/clientinfo/*.go"
           deny:
             - pkg: github.com/jackc/pgx
               desc: A root package must not import a PostgreSQL driver. Use an adapter package.
@@ -49,6 +51,7 @@ linters:
             - "**/cache/*.go"
             - "**/transaction/*.go"
             - "**/outbox/*.go"
+            - "**/audit/*.go"
             - "**/streams/*.go"
             - "**/manifest/*.go"
             - "**/eventtypes/*.go"
@@ -73,6 +76,8 @@ linters:
           files:
             - "**/migrate/postgres/*.go"
           deny:
+            - pkg: github.com/techorionai/constellation-platform-go/audit/postgres
+              desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/auth/clientcred
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/clients/identity
@@ -95,6 +100,8 @@ linters:
           files:
             - "**/health/postgres/*.go"
           deny:
+            - pkg: github.com/techorionai/constellation-platform-go/audit/postgres
+              desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/auth/clientcred
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/clients/identity
@@ -117,6 +124,8 @@ linters:
           files:
             - "**/health/valkey/*.go"
           deny:
+            - pkg: github.com/techorionai/constellation-platform-go/audit/postgres
+              desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/auth/clientcred
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/clients/identity
@@ -139,6 +148,8 @@ linters:
           files:
             - "**/cache/valkey/*.go"
           deny:
+            - pkg: github.com/techorionai/constellation-platform-go/audit/postgres
+              desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/auth/clientcred
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/clients/identity
@@ -183,6 +194,8 @@ linters:
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/retention/postgres
               desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/audit/postgres
+              desc: An adapter must not import another adapter.
         adapter-secrets-postgres:
           # The test files are excluded, because the integration tests of this
           # adapter use migrate/postgres and transaction/postgres.
@@ -212,10 +225,14 @@ linters:
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/retention/postgres
               desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/audit/postgres
+              desc: An adapter must not import another adapter.
         adapter-retention-postgres:
           files:
             - "**/retention/postgres/*.go"
           deny:
+            - pkg: github.com/techorionai/constellation-platform-go/audit/postgres
+              desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/auth/clientcred
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/clients/identity
@@ -264,6 +281,8 @@ linters:
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/retention/postgres
               desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/audit/postgres
+              desc: An adapter must not import another adapter.
         adapter-auth-clientcred:
           files:
             - "**/auth/clientcred/*.go"
@@ -289,6 +308,8 @@ linters:
             - pkg: github.com/techorionai/constellation-platform-go/secrets/postgres
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/retention/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/audit/postgres
               desc: An adapter must not import another adapter.
         adapter-auth-introspect:
           files:
@@ -318,6 +339,8 @@ linters:
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/retention/postgres
               desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/audit/postgres
+              desc: An adapter must not import another adapter.
         adapter-clients-identity:
           files:
             - "**/clients/identity/*.go"
@@ -341,6 +364,8 @@ linters:
             - pkg: github.com/techorionai/constellation-platform-go/secrets/postgres
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/retention/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/audit/postgres
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/clients/events
               desc: An adapter must not import another adapter.
@@ -367,6 +392,8 @@ linters:
             - pkg: github.com/techorionai/constellation-platform-go/secrets/postgres
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/retention/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/audit/postgres
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/clients/identity
               desc: An adapter must not import another adapter.
@@ -399,7 +426,42 @@ linters:
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/retention/postgres
               desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/audit/postgres
+              desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/streams/valkey
+              desc: An adapter must not import another adapter.
+        adapter-audit-postgres:
+          files:
+            - "**/audit/postgres/*.go"
+            - "!$test"
+          deny:
+            - pkg: github.com/techorionai/constellation-platform-go/auth/clientcred
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/clients/identity
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/clients/events
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/auth/jwt
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/auth/introspect
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/migrate/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/health/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/health/valkey
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/cache/valkey
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/transaction/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/secrets/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/retention/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/streams/valkey
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/outbox/postgres
               desc: An adapter must not import another adapter.
         adapter-streams-valkey:
           files:
@@ -429,6 +491,8 @@ linters:
             - pkg: github.com/techorionai/constellation-platform-go/secrets/postgres
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/retention/postgres
+              desc: An adapter must not import another adapter.
+            - pkg: github.com/techorionai/constellation-platform-go/audit/postgres
               desc: An adapter must not import another adapter.
             - pkg: github.com/techorionai/constellation-platform-go/outbox/postgres
               desc: An adapter must not import another adapter.
