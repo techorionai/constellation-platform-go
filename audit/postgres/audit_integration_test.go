@@ -453,7 +453,7 @@ func TestIntegration(t *testing.T) {
 		if err != nil || !slices.Equal(apps, []string{"crm", "helpdesk"}) {
 			t.Fatalf("AuditApps = %v, err = %v", apps, err)
 		}
-		if got := members(t, admin); !slices.Equal(got, []string{"crm", "helpdesk"}) {
+		if got := containers.AuditIndexMembers(t, admin); !slices.Equal(got, []string{"crm", "helpdesk"}) {
 			t.Errorf("set = %v, want [crm helpdesk]", got)
 		}
 	})
@@ -480,7 +480,7 @@ func TestIntegration(t *testing.T) {
 		if !errors.Is(err, streamsvalkey.ErrTooManyAuditApps) || len(apps) != 1000 || !slices.IsSorted(apps) || apps[0] != "app0000" || apps[999] != "app0999" {
 			t.Fatalf("AuditApps: len = %d, err = %v", len(apps), err)
 		}
-		if got := members(t, admin); len(got) != 1001 {
+		if got := containers.AuditIndexMembers(t, admin); len(got) != 1001 {
 			t.Errorf("set has %d members, want 1001", len(got))
 		}
 	})
@@ -488,21 +488,21 @@ func TestIntegration(t *testing.T) {
 	// I7c: forged members do not count. The call deletes them.
 	t.Run("I7c_forged_members_deleted", func(t *testing.T) {
 		admin := vk.Admin(t)
-		seedForged(t, admin)
+		containers.SeedAuditIndex(t, admin, 12000, "helpdesk", "crm")
 		reader, _ := newClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
 		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
 		if err != nil || !slices.Equal(apps, []string{"crm", "helpdesk"}) {
 			t.Fatalf("AuditApps = %v, err = %v", apps, err)
 		}
-		if got := members(t, admin); !slices.Equal(got, []string{"crm", "helpdesk"}) {
-			t.Errorf("set has %d members, want [crm helpdesk]", len(got))
+		if got := containers.AuditIndexMembers(t, admin); !slices.Equal(got, []string{"crm", "helpdesk"}) {
+			t.Errorf("set = %v, want [crm helpdesk]", got)
 		}
 	})
 
 	// I7d: a reader without +srem. The call works and the members stay.
 	t.Run("I7d_reader_without_srem", func(t *testing.T) {
 		admin := vk.Admin(t)
-		seedForged(t, admin)
+		containers.SeedAuditIndex(t, admin, 3000, "helpdesk", "crm")
 		user, password := vk.NewACLUser(t, "auditold", containers.ValkeyACLEvents())
 		old := "(~audit.stream:* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream " +
 			"+xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange) (~audit.streams +sscan)"
@@ -522,8 +522,8 @@ func TestIntegration(t *testing.T) {
 		if err != nil || !slices.Equal(apps, []string{"crm", "helpdesk"}) {
 			t.Fatalf("AuditApps = %v, err = %v", apps, err)
 		}
-		if got := members(t, admin); len(got) != 12002 {
-			t.Errorf("set has %d members, want 12002", len(got))
+		if got := containers.AuditIndexMembers(t, admin); len(got) != 3002 {
+			t.Errorf("set has %d members, want 3002", len(got))
 		}
 	})
 
@@ -682,41 +682,4 @@ func (l *lockedBuffer) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.b.String()
-}
-
-// members returns the sorted members of the set audit.streams.
-func members(t *testing.T, admin valkeygo.Client) []string {
-	t.Helper()
-	got, err := admin.Do(t.Context(), admin.B().Smembers().Key(streams.AuditIndexKey).Build()).AsStrSlice()
-	if err != nil {
-		t.Fatal(err)
-	}
-	slices.Sort(got)
-	return got
-}
-
-// seedForged makes the set with 12000 forged names that pass the pattern and
-// have no stream, and the apps helpdesk and crm with a stream.
-func seedForged(t *testing.T, admin valkeygo.Client) {
-	t.Helper()
-	if err := do(admin, "DEL", streams.AuditIndexKey); err != nil {
-		t.Fatal(err)
-	}
-	for _, a := range []string{"helpdesk", "crm"} {
-		if err := do(admin, "XADD", "audit.stream:"+a, "*", "event", "{}"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for batch := range 3 {
-		forged := []string{"SADD", streams.AuditIndexKey}
-		for i := range 4000 {
-			forged = append(forged, fmt.Sprintf("f%06d", batch*4000+i+1))
-		}
-		if err := do(admin, forged...); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := do(admin, "SADD", streams.AuditIndexKey, "helpdesk", "crm"); err != nil {
-		t.Fatal(err)
-	}
 }

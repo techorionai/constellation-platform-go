@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -525,38 +526,42 @@ func auditClient(t *testing.T, vk *containers.ValkeyInstance, prefix string, opt
 	return c
 }
 
-func auditMembers(t *testing.T, admin valkeygo.Client) []string {
+// auditOldReader makes a reader with the selectors of v0.7.0, with no +srem.
+func auditOldReader(t *testing.T, vk *containers.ValkeyInstance, admin valkeygo.Client) valkeygo.Client {
 	t.Helper()
-	got, err := admin.Do(t.Context(), admin.B().Smembers().Key(streams.AuditIndexKey).Build()).AsStrSlice()
+	user, password := vk.NewACLUser(t, "auditold", containers.ValkeyACLEvents())
+	if err := doArbitrary(admin, []string{"ACL", "SETUSER", user,
+		"(~audit.stream:* +xinfo|stream +xrange)", "(~audit.streams +sscan)"}); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := valkeygo.NewClient(valkeygo.ClientOption{
+		InitAddress: []string{vk.Address()}, Username: user, Password: password.Reveal(), DisableCache: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sorted(got)
+	t.Cleanup(reader.Close)
+	return reader
 }
 
-func auditSeed(t *testing.T, admin valkeygo.Client, forged int, apps ...string) {
+// xinfoStreamCalls returns the number of XINFO STREAM commands that the server ran.
+func xinfoStreamCalls(t *testing.T, admin valkeygo.Client) int {
 	t.Helper()
-	ctx := t.Context()
-	if err := admin.Do(ctx, admin.B().Del().Key(streams.AuditIndexKey).Build()).Error(); err != nil {
+	info, err := admin.Do(t.Context(), admin.B().Info().Section("commandstats").Build()).ToString()
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, a := range apps {
-		if err := doArbitrary(admin, []string{"XADD", "audit.stream:" + a, "*", "event", "{}"}); err != nil {
-			t.Fatal(err)
-		}
-		if err := doArbitrary(admin, []string{"SADD", streams.AuditIndexKey, a}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for start := 0; start < forged; start += 1000 {
-		cmd := []string{"SADD", streams.AuditIndexKey}
-		for i := start; i < min(start+1000, forged); i++ {
-			cmd = append(cmd, fmt.Sprintf("f%06d", i+1))
-		}
-		if err := doArbitrary(admin, cmd); err != nil {
-			t.Fatal(err)
+	for line := range strings.SplitSeq(info, "\n") {
+		if rest, ok := strings.CutPrefix(line, "cmdstat_xinfo|stream:calls="); ok {
+			n, _, _ := strings.Cut(rest, ",")
+			calls, err := strconv.Atoi(n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return calls
 		}
 	}
+	return 0
 }
 
 func TestIntegrationAuditApps(t *testing.T) {
@@ -565,49 +570,56 @@ func TestIntegrationAuditApps(t *testing.T) {
 
 	// I7e: the second check finds an app that publishes between the first check and the SREM.
 	t.Run("I7e_second_check", func(t *testing.T) {
-		auditSeed(t, admin, 0, "helpdesk")
+		containers.SeedAuditIndex(t, admin, 0, "helpdesk")
 		if err := doArbitrary(admin, []string{"SADD", streams.AuditIndexKey, "newapp"}); err != nil {
 			t.Fatal(err)
 		}
 		producer := auditClient(t, vk, "newapp", containers.ValkeyACLEvents(), containers.ValkeyACLAuditProducer())
 		reader := auditClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
-		defer streamsvalkey.SetAuditBeforeSrem(func() {
-			if err := doArbitrary(producer, []string{"XADD", "audit.stream:newapp", "*", "event", "{}"}); err != nil {
-				t.Error(err)
-			}
-		})()
-		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
+		apps, err := streamsvalkey.AuditAppsWith(t.Context(), reader, streamsvalkey.AuditHooks{
+			BeforeSrem: func() {
+				if err := doArbitrary(producer, []string{"XADD", "audit.stream:newapp", "*", "event", "{}"}); err != nil {
+					t.Error(err)
+				}
+			},
+		})
 		if err != nil || !slices.Equal(apps, []string{"helpdesk", "newapp"}) {
 			t.Fatalf("AuditApps = %v, err = %v", apps, err)
 		}
 	})
 
-	// I7f: the scan limit counts the members that the scan reads.
+	// I7f: the scan limit counts the members that the scan reads. The scan deletes
+	// each member that it read and that has no stream. The unread members stay.
 	t.Run("I7f_scan_limit", func(t *testing.T) {
-		auditSeed(t, admin, 700, "helpdesk")
+		const limit = 600
+		containers.SeedAuditIndex(t, admin, 700, "helpdesk")
 		reader := auditClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
-		defer streamsvalkey.SetAuditMemberLimit(600)()
-		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
+		apps, err := streamsvalkey.AuditAppsWith(t.Context(), reader, streamsvalkey.AuditHooks{MemberLimit: limit})
 		if !errors.Is(err, streamsvalkey.ErrTooManyAuditApps) {
 			t.Fatalf("err = %v, want ErrTooManyAuditApps", err)
 		}
-		for _, a := range apps {
-			if a != "helpdesk" {
-				t.Errorf("result has %q, which has no stream", a)
-			}
+		left := containers.AuditIndexMembers(t, admin)
+		if !slices.Contains(left, "helpdesk") {
+			t.Fatalf("set = %d members, the app helpdesk is not in it", len(left))
 		}
-		left := auditMembers(t, admin)
-		if len(left) >= 701 || len(left) < 100 {
-			t.Errorf("set has %d members, want fewer than 701 and the unread ones", len(left))
+		// The scan read exactly 600 members. It deleted each one that has no stream.
+		wantLeft := 701 - limit
+		if len(apps) == 1 {
+			wantLeft++
+		}
+		if len(apps) > 1 || len(apps) == 1 && apps[0] != "helpdesk" {
+			t.Fatalf("apps = %v, want [helpdesk] or no app", apps)
+		}
+		if len(left) != wantLeft {
+			t.Errorf("set has %d members, want %d", len(left), wantLeft)
 		}
 	})
 
 	// I7g: a set with fewer members than the limit is not truncated.
 	t.Run("I7g_below_limit", func(t *testing.T) {
-		auditSeed(t, admin, 598, "helpdesk")
+		containers.SeedAuditIndex(t, admin, 598, "helpdesk")
 		reader := auditClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
-		defer streamsvalkey.SetAuditMemberLimit(600)()
-		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
+		apps, err := streamsvalkey.AuditAppsWith(t.Context(), reader, streamsvalkey.AuditHooks{MemberLimit: 600})
 		if err != nil || !slices.Equal(apps, []string{"helpdesk"}) {
 			t.Fatalf("AuditApps = %v, err = %v", apps, err)
 		}
@@ -615,30 +627,67 @@ func TestIntegrationAuditApps(t *testing.T) {
 
 	// I7h: no second check runs after an SREM error.
 	t.Run("I7h_no_second_check_after_srem_error", func(t *testing.T) {
-		auditSeed(t, admin, 1, "helpdesk")
-		user, password := vk.NewACLUser(t, "auditold", containers.ValkeyACLEvents())
-		if err := doArbitrary(admin, []string{"ACL", "SETUSER", user,
-			"(~audit.stream:* +xinfo|stream +xrange)", "(~audit.streams +sscan)"}); err != nil {
-			t.Fatal(err)
-		}
-		reader, err := valkeygo.NewClient(valkeygo.ClientOption{
-			InitAddress: []string{vk.Address()}, Username: user, Password: password.Reveal(), DisableCache: true,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(reader.Close)
+		containers.SeedAuditIndex(t, admin, 1, "helpdesk")
+		reader := auditOldReader(t, vk, admin)
 		var checks atomic.Int32
-		defer streamsvalkey.SetAuditSecondCheck(func() { checks.Add(1) })()
-		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
+		apps, err := streamsvalkey.AuditAppsWith(t.Context(), reader, streamsvalkey.AuditHooks{
+			SecondCheck: func() { checks.Add(1) },
+		})
 		if err != nil || !slices.Equal(apps, []string{"helpdesk"}) {
 			t.Fatalf("AuditApps = %v, err = %v", apps, err)
 		}
 		if n := checks.Load(); n != 0 {
 			t.Errorf("second checks = %d, want 0", n)
 		}
-		if got := auditMembers(t, admin); len(got) != 2 {
+		if got := containers.AuditIndexMembers(t, admin); len(got) != 2 {
 			t.Errorf("set = %v, want the forged member to stay", got)
+		}
+	})
+
+	// I7i: the set has exactly as many members as the limit. SSCAN can return a
+	// cursor that is not zero and then an empty page. This is not a truncation.
+	t.Run("I7i_set_at_limit", func(t *testing.T) {
+		containers.SeedAuditIndex(t, admin, 499, "helpdesk")
+		reader := auditClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
+		apps, err := streamsvalkey.AuditAppsWith(t.Context(), reader, streamsvalkey.AuditHooks{MemberLimit: 500})
+		if err != nil || !slices.Equal(apps, []string{"helpdesk"}) {
+			t.Fatalf("AuditApps = %v, err = %v", apps, err)
+		}
+		if got := containers.AuditIndexMembers(t, admin); !slices.Equal(got, []string{"helpdesk"}) {
+			t.Errorf("set has %d members, want [helpdesk]", len(got))
+		}
+	})
+
+	// I7j: a reader without +srem reads a limited number of members in each call,
+	// and the call returns ErrTooManyAuditApps. The members stay in the set.
+	t.Run("I7j_no_srem_bounds_the_scan", func(t *testing.T) {
+		const noSremLimit = 1000
+		containers.SeedAuditIndex(t, admin, 3000, "helpdesk")
+		reader := auditOldReader(t, vk, admin)
+		for call := 1; call <= 2; call++ {
+			before := xinfoStreamCalls(t, admin)
+			_, err := streamsvalkey.AuditAppsWith(t.Context(), reader, streamsvalkey.AuditHooks{NoSremLimit: noSremLimit})
+			if !errors.Is(err, streamsvalkey.ErrTooManyAuditApps) {
+				t.Fatalf("call %d: err = %v, want ErrTooManyAuditApps", call, err)
+			}
+			if n := xinfoStreamCalls(t, admin) - before; n > noSremLimit {
+				t.Errorf("call %d: %d XINFO STREAM commands, want a maximum of %d", call, n, noSremLimit)
+			}
+		}
+		if got := containers.AuditIndexMembers(t, admin); len(got) != 3001 {
+			t.Errorf("set has %d members, want 3001", len(got))
+		}
+	})
+
+	// I7k: an SREM error that is not NOPERM stops the call.
+	t.Run("I7k_srem_error_stops_the_call", func(t *testing.T) {
+		containers.SeedAuditIndex(t, admin, 1, "helpdesk")
+		reader := auditClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		apps, err := streamsvalkey.AuditAppsWith(ctx, reader, streamsvalkey.AuditHooks{BeforeSrem: cancel})
+		if !errors.Is(err, context.Canceled) || apps != nil {
+			t.Fatalf("AuditApps = %v, err = %v, want a context.Canceled error", apps, err)
 		}
 	})
 }
