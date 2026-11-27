@@ -86,7 +86,6 @@ type Option func(*options)
 
 type options struct {
 	family streams.Family
-	logger *slog.Logger
 }
 
 // DefaultAuditIndexRefresh has no effect.
@@ -112,18 +111,18 @@ func WithAuditIndexRefresh(_ time.Duration) Option {
 	return func(*options) {}
 }
 
-// WithLogger sets the logger of the publisher. The default is slog.Default().
-func WithLogger(l *slog.Logger) Option {
-	return func(o *options) { o.logger = l }
+// WithLogger has no effect.
+//
+// Deprecated: A publisher does not log, because it sends no index command. A
+// later minor version deletes this option.
+func WithLogger(_ *slog.Logger) Option {
+	return func(*options) {}
 }
 
 func resolve(opts []Option) options {
 	o := options{family: streams.Events}
 	for _, opt := range opts {
 		opt(&o)
-	}
-	if o.logger == nil {
-		o.logger = slog.Default()
 	}
 	return o
 }
@@ -585,7 +584,7 @@ func defaultAuditOptions() auditOptions {
 	return auditOptions{memberLimit: MaxAuditMembers}
 }
 
-// auditCheckChunk is the number of XINFO STREAM commands in one pipeline.
+// auditCheckChunk is the number of XINFO GROUPS commands in one pipeline.
 const auditCheckChunk = 200
 
 // auditScanCount is the COUNT hint of each SSCAN command.
@@ -594,7 +593,7 @@ const auditScanCount = 500
 // AuditApps returns the sorted apps that write an audit stream. It reads the
 // trusted set audit.apps (see [RegisterAuditApp]) with SSCAN. Only a member that
 // matches the app name pattern and whose stream audit.stream:<member> exists
-// (XINFO STREAM) counts as an app. It deletes no member. A registered member
+// (XINFO GROUPS) counts as an app. It deletes no member. A registered member
 // with no stream is an app that did not publish yet, and the next call examines
 // it again. No function reads the old set audit.streams, so a name that a
 // producer writes there gives no command.
@@ -650,7 +649,7 @@ func auditApps(ctx context.Context, c valkeygo.Client, opts auditOptions) ([]str
 				candidates = append(candidates, m)
 			}
 		}
-		found, _, err := auditHasStream(ctx, c, candidates)
+		found, err := auditHasStream(ctx, c, candidates)
 		if err != nil {
 			return nil, err
 		}
@@ -699,25 +698,27 @@ func UnregisterAuditApp(ctx context.Context, c valkeygo.Client, app string) erro
 	return nil
 }
 
-// auditHasStream sends XINFO STREAM for each member. It returns the members with
-// a stream and the members with no stream.
-func auditHasStream(ctx context.Context, c valkeygo.Client, members []string) (exists, missing []string, err error) {
+// auditHasStream sends XINFO GROUPS for each member. It returns the members with
+// a stream. The reply of XINFO GROUPS holds no entry data, so a producer cannot
+// make the reply large with the size of its entries. The reply of XINFO STREAM
+// holds the first and the last entry.
+func auditHasStream(ctx context.Context, c valkeygo.Client, members []string) ([]string, error) {
+	var exists []string
 	for start := 0; start < len(members); start += auditCheckChunk {
 		chunk := members[start:min(start+auditCheckChunk, len(members))]
 		cmds := make(valkeygo.Commands, 0, len(chunk))
 		for _, m := range chunk {
-			cmds = append(cmds, c.B().Arbitrary("XINFO", "STREAM").Keys(streams.KeyFor(streams.Audit, m)).Build())
+			cmds = append(cmds, c.B().Arbitrary("XINFO", "GROUPS").Keys(streams.KeyFor(streams.Audit, m)).Build())
 		}
 		for i, res := range c.DoMulti(ctx, cmds...) {
 			if err := res.Error(); err != nil {
 				if isNoKey(err) {
-					missing = append(missing, chunk[i])
 					continue
 				}
-				return nil, nil, fmt.Errorf("streams: XINFO STREAM %s: %w", streams.KeyFor(streams.Audit, chunk[i]), err)
+				return nil, fmt.Errorf("streams: XINFO GROUPS %s: %w", streams.KeyFor(streams.Audit, chunk[i]), err)
 			}
 			exists = append(exists, chunk[i])
 		}
 	}
-	return exists, missing, nil
+	return exists, nil
 }

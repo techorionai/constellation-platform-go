@@ -562,15 +562,15 @@ func splitSelectors(s string) []string {
 const auditStreamSelectors = "(~audit.stream:* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream " +
 	"+xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange)"
 
-// xinfoStreamCalls returns the number of XINFO STREAM commands that the server ran.
-func xinfoStreamCalls(t *testing.T, admin valkeygo.Client) int {
+// xinfoGroupsCalls returns the number of XINFO GROUPS commands that the server ran.
+func xinfoGroupsCalls(t *testing.T, admin valkeygo.Client) int {
 	t.Helper()
 	info, err := admin.Do(t.Context(), admin.B().Info().Section("commandstats").Build()).ToString()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for line := range strings.SplitSeq(info, "\n") {
-		if rest, ok := strings.CutPrefix(line, "cmdstat_xinfo|stream:calls="); ok {
+		if rest, ok := strings.CutPrefix(line, "cmdstat_xinfo|groups:calls="); ok {
 			n, _, _ := strings.Cut(rest, ",")
 			calls, err := strconv.Atoi(n)
 			if err != nil {
@@ -579,6 +579,26 @@ func xinfoStreamCalls(t *testing.T, admin valkeygo.Client) int {
 			return calls
 		}
 	}
+	return 0
+}
+
+// netOutputBytes returns the number of bytes that the server sent to all clients.
+func netOutputBytes(t *testing.T, admin valkeygo.Client) int {
+	t.Helper()
+	info, err := admin.Do(t.Context(), admin.B().Info().Section("stats").Build()).ToString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for line := range strings.SplitSeq(info, "\n") {
+		if rest, ok := strings.CutPrefix(line, "total_net_output_bytes:"); ok {
+			n, err := strconv.Atoi(strings.TrimSpace(rest))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}
+	}
+	t.Fatal("total_net_output_bytes not found")
 	return 0
 }
 
@@ -618,19 +638,43 @@ func TestIntegrationAuditApps(t *testing.T) {
 	}
 
 	// I7c: regression test of finding R5. Forged names in audit.streams give no
-	// XINFO STREAM command.
+	// XINFO GROUPS command.
 	t.Run("I7c_forged_names_give_no_load", func(t *testing.T) {
 		reset(t)
 		containers.SeedAuditIndex(t, admin, 100000, "helpdesk", "crm")
 		containers.RegisterAuditApps(t, admin, "helpdesk", "crm")
 		reader := newReader(t)
-		before := xinfoStreamCalls(t, admin)
+		before := xinfoGroupsCalls(t, admin)
 		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
 		if err != nil || !slices.Equal(apps, []string{"crm", "helpdesk"}) {
 			t.Fatalf("AuditApps = %v, err = %v", apps, err)
 		}
-		if n := xinfoStreamCalls(t, admin) - before; n != 2 {
-			t.Errorf("%d XINFO STREAM commands, want 2", n)
+		if n := xinfoGroupsCalls(t, admin) - before; n != 2 {
+			t.Errorf("%d XINFO GROUPS commands, want 2", n)
+		}
+	})
+
+	// I7h: regression test of finding R6. A large entry of a producer does not
+	// come back in the stream check.
+	t.Run("I7h_large_entry_not_returned", func(t *testing.T) {
+		reset(t)
+		const size = 5 << 20
+		for _, app := range []string{"helpdesk", "crm"} {
+			big := strings.Repeat("x", size)
+			if err := doArbitrary(admin, []string{"XADD", streams.KeyFor(streams.Audit, app), "*", "event", big}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		containers.RegisterAuditApps(t, admin, "helpdesk", "crm")
+		reader := newReader(t)
+		before := netOutputBytes(t, admin)
+		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
+		if err != nil || !slices.Equal(apps, []string{"crm", "helpdesk"}) {
+			t.Fatalf("AuditApps = %v, err = %v", apps, err)
+		}
+		// XINFO STREAM gives the first and the last entry, more than 20 MB for 2 streams.
+		if n := netOutputBytes(t, admin) - before; n > 1<<20 {
+			t.Errorf("the server sent %d bytes for the check, want less than 1 MiB", n)
 		}
 	})
 
@@ -642,8 +686,8 @@ func TestIntegrationAuditApps(t *testing.T) {
 		if !errors.Is(err, streamsvalkey.ErrTooManyAuditApps) {
 			t.Fatalf("err = %v, want ErrTooManyAuditApps", err)
 		}
-		if len(apps) == 0 || len(apps) > 600 {
-			t.Errorf("%d apps, want 1 to 600", len(apps))
+		if len(apps) != 600 {
+			t.Errorf("%d apps, want 600", len(apps))
 		}
 		if got := containers.AuditIndexMembers(t, admin); len(got) != 700 {
 			t.Errorf("audit.apps has %d members, want 700", len(got))

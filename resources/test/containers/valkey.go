@@ -122,7 +122,11 @@ func ValkeyACLAuditProducer() ACLOption {
 }
 
 // ValkeyACLAuditReader adds the two ACL selectors of the audit service
-// (streams/valkey.AuditReaderSelectors).
+// (streams/valkey.AuditReaderSelectors). The selector for the set is
+// (~audit.apps +sscan). The selector for the streams is
+// (~audit.stream:* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups
+// +xinfo|stream +xinfo|consumers +xgroup|create +xgroup|createconsumer
+// +xgroup|delconsumer +xrange).
 func ValkeyACLAuditReader() ACLOption {
 	return func(o *aclOptions) { o.auditReader = true }
 }

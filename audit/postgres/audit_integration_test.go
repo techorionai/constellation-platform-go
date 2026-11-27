@@ -549,8 +549,8 @@ func TestIntegration(t *testing.T) {
 		c, _ := newClient(t, vk, app, containers.ValkeyACLEvents(), containers.ValkeyACLAuditProducer())
 		var logs lockedBuffer
 		pub := streamsvalkey.NewPublisher(c, app, streamsvalkey.WithFamily(streams.Audit),
-			streamsvalkey.WithAuditIndexRefresh(0), //nolint:staticcheck // I9 tests the deprecated option
-			streamsvalkey.WithLogger(slog.New(slog.NewJSONHandler(&logs, nil))))
+			streamsvalkey.WithAuditIndexRefresh(0),                              //nolint:staticcheck // I9 tests the deprecated option
+			streamsvalkey.WithLogger(slog.New(slog.NewJSONHandler(&logs, nil)))) //nolint:staticcheck // I9 tests the deprecated option
 		payload := [][]byte{[]byte(`{"id":"secret-payload"}`)}
 		for range 2 {
 			if err := pub.Publish(t.Context(), payload); err != nil {
