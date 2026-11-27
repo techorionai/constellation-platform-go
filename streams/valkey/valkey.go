@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	valkeygo "github.com/valkey-io/valkey-go"
@@ -41,28 +40,27 @@ func ACLSelectors(app string) string {
 		"+xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange)"
 }
 
-// AuditProducerSelectors returns the two ACL selectors that a service user
-// needs to write its own audit stream: XADD and XTRIM on audit.stream:<app>, and
-// SADD on the set audit.streams. Give them to each service user, besides
-// [ACLSelectors]. They give no read access.
+// AuditProducerSelectors returns the ACL selector that a service user needs to
+// write its own audit stream: XADD and XTRIM on audit.stream:<app>. Give it to
+// each service user, besides [ACLSelectors]. It gives no read access and no
+// command on the audit app index. Only the provisioner registers the app in the
+// set audit.apps (see [RegisterAuditApp]).
 //
 // AuditProducerSelectors panics if app does not match the app name pattern of
 // [streams.GroupName].
 func AuditProducerSelectors(app string) string {
 	mustApp(app)
-	return "(~" + streams.KeyFor(streams.Audit, app) + " +xadd +xtrim) " +
-		"(~" + streams.AuditIndexKey + " +sadd)"
+	return "(~" + streams.KeyFor(streams.Audit, app) + " +xadd +xtrim)"
 }
 
 // AuditReaderSelectors returns the two ACL selectors of the audit service user:
-// it consumes all audit streams, reads the set audit.streams with SSCAN, and
-// removes members from it with SREM. [AuditApps] removes the members that fail
-// the app name pattern or have no stream. Give the selectors only to the audit
+// it consumes all audit streams and reads the trusted set audit.apps with SSCAN.
+// It has no write command on the set. Give the selectors only to the audit
 // service user.
 func AuditReaderSelectors() string {
 	return "(~" + streams.AuditKeyPrefix + "* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream " +
 		"+xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange) " +
-		"(~" + streams.AuditIndexKey + " +sscan +srem)"
+		"(~" + streams.AuditAppsKey + " +sscan)"
 }
 
 // mustApp panics if app is not a valid app name. The value comes from the
@@ -87,13 +85,14 @@ func isErrPrefix(err error, prefix string) bool {
 type Option func(*options)
 
 type options struct {
-	family       streams.Family
-	indexRefresh time.Duration
-	logger       *slog.Logger
+	family streams.Family
+	logger *slog.Logger
 }
 
-// DefaultAuditIndexRefresh is the time after which an audit publisher adds its
-// app to the audit index again.
+// DefaultAuditIndexRefresh has no effect.
+//
+// Deprecated: A publisher sends no index command. Only the provisioner writes
+// the set audit.apps. A later minor version deletes this constant.
 const DefaultAuditIndexRefresh = time.Minute
 
 // WithFamily sets the family of the stream. The default is [streams.Events]. It
@@ -105,11 +104,12 @@ func WithFamily(f streams.Family) Option {
 	return func(o *options) { o.family = f }
 }
 
-// WithAuditIndexRefresh sets the time after which an audit publisher adds its
-// app to the audit index again. The default is [DefaultAuditIndexRefresh]. It
-// is for tests.
-func WithAuditIndexRefresh(d time.Duration) Option {
-	return func(o *options) { o.indexRefresh = d }
+// WithAuditIndexRefresh has no effect.
+//
+// Deprecated: A publisher sends no index command. Only the provisioner writes
+// the set audit.apps. A later minor version deletes this option.
+func WithAuditIndexRefresh(_ time.Duration) Option {
+	return func(*options) {}
 }
 
 // WithLogger sets the logger of the publisher. The default is slog.Default().
@@ -118,7 +118,7 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 func resolve(opts []Option) options {
-	o := options{family: streams.Events, indexRefresh: DefaultAuditIndexRefresh}
+	o := options{family: streams.Events}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -131,15 +131,8 @@ func resolve(opts []Option) options {
 // Publisher adds events to the stream of one app. It implements
 // outbox.Publisher.
 type Publisher struct {
-	c      valkeygo.Client
-	key    string
-	app    string
-	family streams.Family
-
-	refresh time.Duration
-	logger  *slog.Logger
-	mu      sync.Mutex
-	lastAdd time.Time
+	c   valkeygo.Client
+	key string
 }
 
 // NewPublisher returns a publisher for events.stream:<app>, or for
@@ -148,17 +141,12 @@ type Publisher struct {
 // [ACLSelectors] or [AuditProducerSelectors]. It panics if app is not a valid
 // app name.
 //
-// An audit publisher adds app to the set audit.streams after its first
-// successful publish, and again after a successful publish when the last add is
-// older than one minute. A failed add is logged at warn level with no data. The
-// publish does not fail, and the publisher tries again after the next publish.
+// A publisher sends no index command. The provisioner registers the app in the
+// set audit.apps with [RegisterAuditApp].
 func NewPublisher(c valkeygo.Client, app string, opts ...Option) *Publisher {
 	mustApp(app)
 	o := resolve(opts)
-	return &Publisher{
-		c: c, key: streams.KeyFor(o.family, app), app: app, family: o.family,
-		refresh: o.indexRefresh, logger: o.logger,
-	}
+	return &Publisher{c: c, key: streams.KeyFor(o.family, app)}
 }
 
 // Publish sends one XADD for each payload in one pipeline.
@@ -175,37 +163,7 @@ func (p *Publisher) Publish(ctx context.Context, payloads [][]byte) error {
 			return fmt.Errorf("streams: XADD %s: %w", p.key, err)
 		}
 	}
-	if p.family == streams.Audit {
-		p.addToIndex(ctx)
-	}
 	return nil
-}
-
-// addToIndex adds the app to the audit index when the last add is missing or old.
-// It holds the lock only to read and set the time. It sends SADD with no lock, so
-// a slow Valkey does not block other callers. A caller that finds a fresh time
-// does not send SADD. If SADD fails, the time goes back to its old value.
-func (p *Publisher) addToIndex(ctx context.Context) {
-	p.mu.Lock()
-	prev := p.lastAdd
-	if !prev.IsZero() && time.Since(prev) < p.refresh {
-		p.mu.Unlock()
-		return
-	}
-	now := time.Now()
-	p.lastAdd = now
-	p.mu.Unlock()
-
-	err := p.c.Do(ctx, p.c.B().Sadd().Key(streams.AuditIndexKey).Member(p.app).Build()).Error()
-	if err != nil {
-		p.mu.Lock()
-		if p.lastAdd.Equal(now) {
-			p.lastAdd = prev
-		}
-		p.mu.Unlock()
-		p.logger.WarnContext(ctx, "streams: cannot add the app to the audit index",
-			slog.String("error.type", fmt.Sprintf("%T", err)))
-	}
 }
 
 // GroupConfig is the configuration of a [Group].
@@ -602,38 +560,29 @@ func mapInt(m map[string]valkeygo.ValkeyMessage, key string) (int64, error) {
 	return v.AsInt64()
 }
 
-// ErrTooManyAuditApps means that the audit index has more than [MaxAuditApps]
-// apps with a stream, or that [AuditApps] read [MaxAuditMembers] members and the
-// set has more. [AuditApps] returns the apps that it found (a maximum of
-// [MaxAuditApps]) with this error.
+// ErrTooManyAuditApps means that the set audit.apps has more than
+// [MaxAuditApps] apps with a stream, or that [AuditApps] read [MaxAuditMembers]
+// members and the set has more. [AuditApps] returns the apps that it found (a
+// maximum of [MaxAuditApps]) with this error.
 var ErrTooManyAuditApps = errors.New("streams: the audit index has too many apps")
 
 // MaxAuditApps is the maximum number of apps that [AuditApps] returns.
 const MaxAuditApps = 1000
 
 // MaxAuditMembers is the maximum number of members that one call of
-// [AuditApps] reads from the set audit.streams. Each member that the scan reads
-// counts, also a member that [AuditApps] deletes. The limit keeps the work of
-// one call small.
-const MaxAuditMembers = 1000 * MaxAuditApps
+// [AuditApps] reads from the set audit.apps. Only the provisioner writes the
+// set, so a larger set is an operator error. The limit keeps the work of one
+// call small.
+const MaxAuditMembers = 10 * MaxAuditApps
 
-// maxAuditMembersNoSrem is the maximum number of members that one call reads
-// after the first SREM error with NOPERM. A reader without +srem cannot delete
-// the members, so a large limit would make each call read the same members
-// again.
-const maxAuditMembersNoSrem = 10 * MaxAuditApps
-
-// auditOptions holds the limits and the test hooks of one call. [AuditApps] uses
-// the defaults. Only a test uses other values.
+// auditOptions holds the limit of one call. [AuditApps] uses the default. Only a
+// test uses another value.
 type auditOptions struct {
 	memberLimit int
-	noSremLimit int
-	beforeSrem  func()
-	secondCheck func()
 }
 
 func defaultAuditOptions() auditOptions {
-	return auditOptions{memberLimit: MaxAuditMembers, noSremLimit: maxAuditMembersNoSrem}
+	return auditOptions{memberLimit: MaxAuditMembers}
 }
 
 // auditCheckChunk is the number of XINFO STREAM commands in one pipeline.
@@ -642,30 +591,23 @@ const auditCheckChunk = 200
 // auditScanCount is the COUNT hint of each SSCAN command.
 const auditScanCount = 500
 
-// AuditApps returns the sorted apps that write an audit stream. It reads the set
-// audit.streams with SSCAN. Only a member that matches the app name pattern and
-// whose stream audit.stream:<member> exists (XINFO STREAM) counts as an app. For
-// each page, it deletes the members that fail the pattern or have no stream with
-// one SREM. Then it checks the deleted members that match the pattern one more
-// time, because an app can publish between the check and the delete. A member
-// whose stream exists then is in the result. The publisher sends XADD before
-// SADD, so a real app is in the result, or it stays in the set. If the SREM
-// deletes the member of an app that publishes in the race, the app is in the
-// result of this call, and the publisher adds the member again at its next index
-// refresh.
+// AuditApps returns the sorted apps that write an audit stream. It reads the
+// trusted set audit.apps (see [RegisterAuditApp]) with SSCAN. Only a member that
+// matches the app name pattern and whose stream audit.stream:<member> exists
+// (XINFO STREAM) counts as an app. It deletes no member. A registered member
+// with no stream is an app that did not publish yet, and the next call examines
+// it again. No function reads the old set audit.streams, so a name that a
+// producer writes there gives no command.
 //
-// A deleted member does not count against [MaxAuditApps]. Each member that the
-// scan reads counts against [MaxAuditMembers]. If more than [MaxAuditApps]
-// members have a stream, or the scan reaches [MaxAuditMembers] and the set has
-// more, it returns the apps that it found (a maximum of [MaxAuditApps]) and
-// [ErrTooManyAuditApps]. The caller logs the error and uses the list.
+// Each member that the scan reads counts against [MaxAuditMembers]. If more than
+// [MaxAuditApps] members have a stream, or the scan reaches [MaxAuditMembers]
+// and the set has more, it returns the apps that it found (a maximum of
+// [MaxAuditApps]) and [ErrTooManyAuditApps]. The caller logs the error and uses
+// the list.
 //
-// An SREM error with NOPERM does not stop the call. The user has no +srem, so
-// the members stay in the set. The call writes one warning to the default
-// logger, and it limits the rest of the scan to 10000 members in total. Then it
-// returns [ErrTooManyAuditApps] if the set has more members. The user needs
-// [AuditReaderSelectors]. Any other error of SREM, for example a connection error
-// or a cancelled context, stops the call and the call returns it.
+// A set that does not exist gives an empty list. An error of SSCAN, for example
+// NOPERM for a reader that has not the selectors of [AuditReaderSelectors],
+// stops the call and the call returns it.
 func AuditApps(ctx context.Context, c valkeygo.Client) ([]string, error) {
 	return auditApps(ctx, c, defaultAuditOptions())
 }
@@ -673,16 +615,15 @@ func AuditApps(ctx context.Context, c valkeygo.Client) ([]string, error) {
 func auditApps(ctx context.Context, c valkeygo.Client, opts auditOptions) ([]string, error) {
 	var apps []string
 	truncated := false
-	warned := false
 	read := 0
 	var cursor uint64
 	for {
-		entry, err := c.Do(ctx, c.B().Sscan().Key(streams.AuditIndexKey).Cursor(cursor).Count(auditScanCount).Build()).AsScanEntry()
+		entry, err := c.Do(ctx, c.B().Sscan().Key(streams.AuditAppsKey).Cursor(cursor).Count(auditScanCount).Build()).AsScanEntry()
 		if err != nil {
 			if valkeygo.IsValkeyNil(err) {
 				return nil, nil
 			}
-			return nil, fmt.Errorf("streams: SSCAN %s: %w", streams.AuditIndexKey, err)
+			return nil, fmt.Errorf("streams: SSCAN %s: %w", streams.AuditAppsKey, err)
 		}
 		cursor = entry.Cursor
 		page := entry.Elements
@@ -703,20 +644,17 @@ func auditApps(ctx context.Context, c valkeygo.Client, opts auditOptions) ([]str
 			truncated = true
 		}
 		read += len(page)
-		found, sremDenied, err := auditPage(ctx, c, page, opts)
+		var candidates []string
+		for _, m := range page {
+			if streams.ValidApp(m) == nil {
+				candidates = append(candidates, m)
+			}
+		}
+		found, _, err := auditHasStream(ctx, c, candidates)
 		if err != nil {
 			return nil, err
 		}
 		apps = append(apps, found...)
-		if sremDenied && !warned {
-			warned = true
-			slog.WarnContext(ctx, "streams: the audit reader has no SREM permission, "+
-				"the scan does not delete members and stops at max_members",
-				slog.String("key", streams.AuditIndexKey), slog.Int("max_members", opts.noSremLimit))
-		}
-		if sremDenied {
-			opts.memberLimit = min(opts.memberLimit, opts.noSremLimit)
-		}
 		if truncated || cursor == 0 {
 			break
 		}
@@ -732,48 +670,33 @@ func auditApps(ctx context.Context, c valkeygo.Client, opts auditOptions) ([]str
 	return apps, nil
 }
 
-// auditPage checks the members of one SSCAN page, deletes the members that fail
-// the pattern or have no stream, and returns the apps that have a stream.
-// sremDenied is true if the SREM gave NOPERM. Any other error of SREM is an error
-// of the call.
-func auditPage(ctx context.Context, c valkeygo.Client, page []string, opts auditOptions) (found []string, sremDenied bool, err error) {
-	var remove, candidates []string
-	for _, m := range page {
-		if streams.ValidApp(m) == nil {
-			candidates = append(candidates, m)
-		} else {
-			remove = append(remove, m)
-		}
+// RegisterAuditApp adds app to the trusted set audit.apps with SADD. The audit
+// service reads this set to find the audit streams. c must be the client of the
+// provisioner (the Valkey admin user). No producer or reader user has a command
+// that writes the set. It returns an error and sends no command if app does not
+// match the app name pattern.
+func RegisterAuditApp(ctx context.Context, c valkeygo.Client, app string) error {
+	if err := streams.ValidApp(app); err != nil {
+		return err
 	}
-	found, missing, err := auditHasStream(ctx, c, candidates)
-	if err != nil {
-		return nil, false, err
+	if err := c.Do(ctx, c.B().Sadd().Key(streams.AuditAppsKey).Member(app).Build()).Error(); err != nil {
+		return fmt.Errorf("streams: SADD %s: %w", streams.AuditAppsKey, err)
 	}
-	remove = append(remove, missing...)
-	if len(remove) == 0 {
-		return found, false, nil
+	return nil
+}
+
+// UnregisterAuditApp removes app from the trusted set audit.apps with SREM.
+// Call it when the provisioner deletes the producer user. c must be the client
+// of the provisioner (the Valkey admin user). It returns an error and sends no
+// command if app does not match the app name pattern.
+func UnregisterAuditApp(ctx context.Context, c valkeygo.Client, app string) error {
+	if err := streams.ValidApp(app); err != nil {
+		return err
 	}
-	if opts.beforeSrem != nil {
-		opts.beforeSrem()
+	if err := c.Do(ctx, c.B().Srem().Key(streams.AuditAppsKey).Member(app).Build()).Error(); err != nil {
+		return fmt.Errorf("streams: SREM %s: %w", streams.AuditAppsKey, err)
 	}
-	if err := c.Do(ctx, c.B().Srem().Key(streams.AuditIndexKey).Member(remove...).Build()).Error(); err != nil {
-		if isErrPrefix(err, "NOPERM") {
-			// The members stay in the set. The next call examines them again.
-			return found, true, nil
-		}
-		return nil, false, fmt.Errorf("streams: SREM %s: %w", streams.AuditIndexKey, err)
-	}
-	if len(missing) > 0 {
-		if opts.secondCheck != nil {
-			opts.secondCheck()
-		}
-		again, _, err := auditHasStream(ctx, c, missing)
-		if err != nil {
-			return nil, false, err
-		}
-		found = append(found, again...)
-	}
-	return found, false, nil
+	return nil
 }
 
 // auditHasStream sends XINFO STREAM for each member. It returns the members with
