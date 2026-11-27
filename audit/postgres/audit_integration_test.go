@@ -389,7 +389,7 @@ func TestIntegration(t *testing.T) {
 			{"XADD other", []string{"XADD", "audit.stream:crm", "*", "event", "{}"}, true},
 			{"SADD", []string{"SADD", "audit.streams", "helpdesk"}, false},
 			{"XREADGROUP", []string{"XREADGROUP", "GROUP", "g", "c", "STREAMS", "audit.stream:helpdesk", ">"}, true},
-			{"SMEMBERS", []string{"SMEMBERS", "audit.streams"}, true},
+			{"SSCAN", []string{"SSCAN", "audit.streams", "0"}, true},
 		}
 		for _, ch := range checks {
 			err := do(c, ch.args...)
@@ -419,7 +419,7 @@ func TestIntegration(t *testing.T) {
 		}{
 			{"XREADGROUP", []string{"XREADGROUP", "GROUP", "audit", "c", "STREAMS", "audit.stream:helpdesk", ">"}, false},
 			{"XACK", []string{"XACK", "audit.stream:helpdesk", "audit", "0-1"}, false},
-			{"SMEMBERS", []string{"SMEMBERS", "audit.streams"}, false},
+			{"SSCAN", []string{"SSCAN", "audit.streams", "0"}, false},
 			{"XADD", []string{"XADD", "audit.stream:helpdesk", "*", "event", "{}"}, true},
 			{"SADD", []string{"SADD", "audit.streams", "x"}, true},
 		}
@@ -474,6 +474,24 @@ func TestIntegration(t *testing.T) {
 		if !errors.Is(err, streamsvalkey.ErrTooManyAuditApps) || len(apps) != 1000 || !slices.IsSorted(apps) || apps[0] != "app0000" || apps[999] != "app0999" {
 			t.Fatalf("AuditApps: len = %d, err = %v", len(apps), err)
 		}
+
+		// A set with more than MaxAuditMembers forged members: the read stops.
+		if err := do(admin, "DEL", streams.AuditIndexKey); err != nil {
+			t.Fatal(err)
+		}
+		for batch := range 3 {
+			forged := []string{"SADD", streams.AuditIndexKey}
+			for i := range 4000 {
+				forged = append(forged, fmt.Sprintf("forged%d-%05d", batch, i))
+			}
+			if err := do(admin, forged...); err != nil {
+				t.Fatal(err)
+			}
+		}
+		apps, err = streamsvalkey.AuditApps(t.Context(), reader)
+		if !errors.Is(err, streamsvalkey.ErrTooManyAuditApps) || len(apps) != 0 {
+			t.Fatalf("AuditApps with forged members: apps = %v, err = %v", apps, err)
+		}
 	})
 
 	// I8: the retention purgers of the audit outbox and the audit stream.
@@ -502,13 +520,15 @@ func TestIntegration(t *testing.T) {
 		if err := f.writeAudit(t.Context(), "unpublished"); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(1100 * time.Millisecond)
 
 		tp, err := retentionpg.NewTablePurger(f.pool, retentionpg.TableSpec{Table: auditpg.Table, TimeColumn: "published_at"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		before := time.Now().Add(-time.Second)
+		// The cut-off is after the publish time of both rows. Wait until the clock
+		// is in a later millisecond, because stream IDs have a resolution of 1 ms.
+		before := time.Now()
+		waitFor(t, "the clock after the cut-off", 5*time.Second, func() bool { return time.Now().UnixMilli() > before.UnixMilli() })
 		n, err := tp.Purge(t.Context(), retention.PurgeParams{Before: before, Limit: 100})
 		if err != nil || n != 2 {
 			t.Fatalf("table purge = %d, err = %v", n, err)
@@ -551,13 +571,13 @@ func TestIntegration(t *testing.T) {
 		if err := do(admin, "DEL", streams.AuditIndexKey); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(200 * time.Millisecond)
-		if err := pub.Publish(t.Context(), payload); err != nil {
-			t.Fatal(err)
-		}
-		if !inIndex() {
-			t.Fatal("the app is not in the index after the refresh")
-		}
+		// Publish until the refresh time has passed and the app is in the index.
+		waitFor(t, "the index refresh", 10*time.Second, func() bool {
+			if err := pub.Publish(t.Context(), payload); err != nil {
+				t.Fatal(err)
+			}
+			return inIndex()
+		})
 
 		// Remove the SADD permission.
 		setACL := func(selectors ...string) {
@@ -567,17 +587,20 @@ func TestIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		setACL("(~audit.stream:helpdesk +xadd +xtrim)")
+		// The selectors come from AuditProducerSelectors. The first one is the
+		// stream permission and the second one is the SADD permission.
+		sel := splitSelectors(streamsvalkey.AuditProducerSelectors(app))
+		setACL(sel[0])
 		if err := do(admin, "DEL", streams.AuditIndexKey); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(200 * time.Millisecond)
-		if err := pub.Publish(t.Context(), payload); err != nil {
-			t.Fatalf("publish with no SADD permission: %v", err)
-		}
-		if !strings.Contains(logs.String(), `"level":"WARN"`) {
-			t.Errorf("no warn log: %q", logs.String())
-		}
+		// Publish until the refresh time has passed and SADD fails with a warn log.
+		waitFor(t, "the warn log", 10*time.Second, func() bool {
+			if err := pub.Publish(t.Context(), payload); err != nil {
+				t.Fatalf("publish with no SADD permission: %v", err)
+			}
+			return strings.Contains(logs.String(), `"level":"WARN"`)
+		})
 		for _, bad := range []string{"secret-payload", "helpdesk"} {
 			if strings.Contains(logs.String(), bad) {
 				t.Errorf("the log has %q: %s", bad, logs.String())
@@ -586,15 +609,29 @@ func TestIntegration(t *testing.T) {
 		if inIndex() {
 			t.Fatal("the app is in the index with no permission")
 		}
-		setACL("(~audit.stream:helpdesk +xadd +xtrim)", "(~audit.streams +sadd)")
-		time.Sleep(200 * time.Millisecond)
-		if err := pub.Publish(t.Context(), payload); err != nil {
-			t.Fatal(err)
-		}
-		if !inIndex() {
-			t.Fatal("the app is not in the index after the permission returned")
-		}
+		setACL(sel...)
+		waitFor(t, "the index after the permission returned", 10*time.Second, func() bool {
+			if err := pub.Publish(t.Context(), payload); err != nil {
+				t.Fatal(err)
+			}
+			return inIndex()
+		})
 	})
+}
+
+// splitSelectors splits the text of ACL selectors, for example "(a) (b)", into
+// one text for each selector.
+func splitSelectors(s string) []string {
+	parts := strings.Split(s, ") (")
+	for i := range parts {
+		if i > 0 {
+			parts[i] = "(" + parts[i]
+		}
+		if i < len(parts)-1 {
+			parts[i] += ")"
+		}
+	}
+	return parts
 }
 
 type lockedBuffer struct {

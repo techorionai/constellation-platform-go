@@ -35,8 +35,9 @@ var (
 	// ErrInvalidDetails means that the details do not marshal to JSON of a
 	// maximum of 16 KiB.
 	ErrInvalidDetails = errors.New("audit: invalid details")
-	// ErrInvalidActor means that an actor field breaks a limit of the contract.
-	ErrInvalidActor = errors.New("audit: invalid actor")
+	// ErrInvalidActor means that an actor field breaks a limit of the contract. It
+	// is the same error as [outbox.ErrInvalidActor].
+	ErrInvalidActor = outbox.ErrInvalidActor
 	// ErrInvalidText means that a value has the character U+0000.
 	ErrInvalidText = errors.New("audit: a value has the character U+0000")
 	// ErrEntryTooLarge means that the CloudEvent in JSON has more than 64 KiB.
@@ -276,7 +277,7 @@ func (w *EntryWriter) build(e *Entry, actor outbox.Actor, m meta, traceparent st
 	if err := w.checkEntry(e); err != nil {
 		return outbox.Row{}, err
 	}
-	if err := checkActor(actor); err != nil {
+	if err := outbox.CheckActor(actor); err != nil {
 		return outbox.Row{}, err
 	}
 	data := entryData{
@@ -335,7 +336,7 @@ func (w *EntryWriter) build(e *Entry, actor outbox.Actor, m meta, traceparent st
 // checkPayload checks the CloudEvent in JSON: no escaped U+0000 and a maximum
 // of 64 KiB.
 func checkPayload(payload []byte) error {
-	if hasEscapedNUL(payload) {
+	if outbox.HasEscapedNUL(payload) {
 		return ErrInvalidText
 	}
 	if len(payload) > maxEntryBytes {
@@ -363,43 +364,6 @@ func (w *EntryWriter) checkEntry(e *Entry) error {
 	}
 	if utf8.RuneCountInString(e.Summary) > maxSummaryLen {
 		return fmt.Errorf("%w: more than %d characters", ErrInvalidSummary, maxSummaryLen)
-	}
-	return nil
-}
-
-// hasEscapedNUL reports whether the JSON text has the escape for U+0000 in a
-// string. The jsonb column of PostgreSQL rejects this escape. An escaped
-// backslash that is followed by the text u0000 does not count.
-func hasEscapedNUL(b []byte) bool {
-	for i := 0; i < len(b); i++ {
-		if b[i] != '\\' {
-			continue
-		}
-		if i+5 < len(b) && b[i+1] == 'u' && string(b[i+2:i+6]) == "0000" {
-			return true
-		}
-		i++
-	}
-	return false
-}
-
-func checkActor(a outbox.Actor) error {
-	n := utf8.RuneCountInString(a.ID)
-	switch {
-	case n < 1 || n > maxActorLen:
-		return fmt.Errorf("%w: the actor ID needs 1 to %d characters", ErrInvalidActor, maxActorLen)
-	case !a.Type.Valid():
-		return fmt.Errorf("%w: unknown actor type %q", ErrInvalidActor, a.Type)
-	case (a.Act == "") != (a.ActType == ""):
-		return fmt.Errorf("%w: set Act and ActType together", ErrInvalidActor)
-	}
-	if a.Act != "" {
-		if utf8.RuneCountInString(a.Act) > maxActorLen {
-			return fmt.Errorf("%w: Act needs 1 to %d characters", ErrInvalidActor, maxActorLen)
-		}
-		if !a.ActType.Valid() {
-			return fmt.Errorf("%w: unknown act type %q", ErrInvalidActor, a.ActType)
-		}
 	}
 	return nil
 }

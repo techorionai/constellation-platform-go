@@ -1579,14 +1579,14 @@ AuditProducerSelectors("<svc>"):
 
 AuditReaderSelectors():
 (~audit.stream:* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream +xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange)
-(~audit.streams +smembers)
+(~audit.streams +sscan)
 ```
 
 - A service writes only its own audit stream. It cannot read any audit stream, and it cannot read the set `audit.streams`.
 - `AuditProducerSelectors` panics if `app` does not match the app name pattern.
 - The install refuses `SCAN` for service users, so the audit service cannot find streams with `SCAN`. An audit publisher adds its app to the set `audit.streams` with `SADD` after its first successful publish in the process. Then it adds the app again after a successful publish when the last add is older than 1 minute, so the set is filled again after Valkey loses it. A failed `SADD` is logged at `warn` level with no data. The publish does not fail, and the publisher tries again after the next publish. The option `WithAuditIndexRefresh` changes the 1 minute for a test. `WithLogger` sets the logger.
-- `AuditApps(ctx, c)` reads the set with `SMEMBERS`. It keeps the members that match the app name pattern and whose stream `audit.stream:<member>` exists (`XINFO STREAM`). It returns them sorted, with a maximum of 1000 (`MaxAuditApps`). If more than 1000 members are valid, it returns the first 1000 and `ErrTooManyAuditApps`. The caller logs the error and uses the list. A forged member names a stream that only its own app can write, so it gives no access. The stream check removes forged members that have no stream.
-- Risk: a service can add many forged members to the set. `AuditApps` drops the members that have no stream, but `SMEMBERS` still reads all members. The memory risk is the same as for the own streams of a service.
+- `AuditApps(ctx, c)` reads the set with `SSCAN` and stops after 10000 members (`MaxAuditMembers`). It keeps the members that match the app name pattern and whose stream `audit.stream:<member>` exists (`XINFO STREAM`). It returns them sorted, with a maximum of 1000 (`MaxAuditApps`). If more than 1000 members are valid, or the set has more than 10000 members, it returns the first 1000 and `ErrTooManyAuditApps`. The caller logs the error and uses the list. A forged member names a stream that only its own app can write, so it gives no access. The stream check removes forged members that have no stream.
+- Risk: a service can add many forged members to the set. `AuditApps` drops the members that have no stream, but a very large set is a risk for Valkey. `AuditApps` reads the set in small steps with `SSCAN` and stops at `MaxAuditMembers`. Then it returns `ErrTooManyAuditApps`. The reader ACL needs `+sscan` only.
 - The trim of an audit stream also removes the entries that the audit service did not read. Use a period that is longer than the longest stop of the audit service. The default is 7 days.
 - `containers.ValkeyACLAuditProducer()` and `containers.ValkeyACLAuditReader()` add the selectors to a test user.
 
@@ -1641,6 +1641,7 @@ The CloudEvent has `specversion` `1.0`, `id` (a UUIDv7), `source` `/<app>`, `typ
 
 - `Entry` has no actor field. The actor is the verified principal in the context (`auth.PrincipalFromContext`), with `act` and `acttype` if the principal has them. A caller cannot replace the verified principal.
 - With no principal in the context, the actor is `outbox.ServiceActor(Config.ClientID)`: `actor` is the client ID and `actortype` is `service`. This is the case for a timer, a consumer, or a command line action. To keep the origin of such an action, put it in `Details`, for example `"origin": "cli"`.
+- Limit: a request that has no principal, for example a request with a bad token that the service denies, also gets the service as the actor. The audit trail cannot tell this case from the work of the service. The contract has no actor type for an unknown client. For a request, put the origin in `Details`, for example `"origin": "request"` and `"reason": "no principal"`. The field `ipAddress` points to the client. A new actor type needs a change of techorionai/constellation-contracts#20.
 
 ### Request metadata
 

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+
+	"github.com/techorionai/constellation-platform-go/outbox"
 )
 
 // U6: the size limit. The other rules keep a CloudEvent far below 64 KiB, so
@@ -26,8 +28,8 @@ func TestEscapedNUL(t *testing.T) {
 		`{"a":"x"}`:        false,
 	}
 	for in, want := range cases {
-		if got := hasEscapedNUL([]byte(in)); got != want {
-			t.Errorf("hasEscapedNUL(%s) = %v, want %v", in, got, want)
+		if got := outbox.HasEscapedNUL([]byte(in)); got != want {
+			t.Errorf("outbox.HasEscapedNUL(%s) = %v, want %v", in, got, want)
 		}
 	}
 }

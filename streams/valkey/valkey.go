@@ -60,7 +60,7 @@ func AuditProducerSelectors(app string) string {
 func AuditReaderSelectors() string {
 	return "(~" + streams.AuditKeyPrefix + "* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream " +
 		"+xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange) " +
-		"(~" + streams.AuditIndexKey + " +smembers)"
+		"(~" + streams.AuditIndexKey + " +sscan)"
 }
 
 // mustApp panics if app is not a valid app name. The value comes from the
@@ -180,19 +180,30 @@ func (p *Publisher) Publish(ctx context.Context, payloads [][]byte) error {
 }
 
 // addToIndex adds the app to the audit index when the last add is missing or old.
+// It holds the lock only to read and set the time. It sends SADD with no lock, so
+// a slow Valkey does not block other callers. A caller that finds a fresh time
+// does not send SADD. If SADD fails, the time goes back to its old value.
 func (p *Publisher) addToIndex(ctx context.Context) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if !p.lastAdd.IsZero() && time.Since(p.lastAdd) < p.refresh {
+	prev := p.lastAdd
+	if !prev.IsZero() && time.Since(prev) < p.refresh {
+		p.mu.Unlock()
 		return
 	}
+	now := time.Now()
+	p.lastAdd = now
+	p.mu.Unlock()
+
 	err := p.c.Do(ctx, p.c.B().Sadd().Key(streams.AuditIndexKey).Member(p.app).Build()).Error()
 	if err != nil {
+		p.mu.Lock()
+		if p.lastAdd.Equal(now) {
+			p.lastAdd = prev
+		}
+		p.mu.Unlock()
 		p.logger.WarnContext(ctx, "streams: cannot add the app to the audit index",
 			slog.String("error.type", fmt.Sprintf("%T", err)))
-		return
 	}
-	p.lastAdd = time.Now()
 }
 
 // GroupConfig is the configuration of a [Group].
@@ -590,28 +601,53 @@ func mapInt(m map[string]valkeygo.ValkeyMessage, key string) (int64, error) {
 }
 
 // ErrTooManyAuditApps means that the audit index has more than [MaxAuditApps]
-// valid apps. [AuditApps] returns the first [MaxAuditApps] with this error.
+// valid apps, or more than [MaxAuditMembers] members. [AuditApps] returns the
+// first [MaxAuditApps] apps that it found, with this error.
 var ErrTooManyAuditApps = errors.New("streams: the audit index has too many apps")
 
 // MaxAuditApps is the maximum number of apps that [AuditApps] returns.
 const MaxAuditApps = 1000
 
+// MaxAuditMembers is the maximum number of members that [AuditApps] reads from
+// the set audit.streams. A producer can add forged members. This limit keeps the
+// memory and the time of the audit service small.
+const MaxAuditMembers = 10 * MaxAuditApps
+
 // auditCheckChunk is the number of XINFO STREAM commands in one pipeline.
 const auditCheckChunk = 200
 
+// auditScanCount is the COUNT hint of each SSCAN command.
+const auditScanCount = 500
+
 // AuditApps returns the sorted apps that write an audit stream. It reads the set
-// audit.streams with SMEMBERS. It keeps the members that match the app name
-// pattern and whose stream audit.stream:<member> exists. A forged member with no
-// stream is not in the result. If more than [MaxAuditApps] members are valid,
-// it returns the first [MaxAuditApps] and [ErrTooManyAuditApps]. The caller
-// logs the error and uses the list. The user needs [AuditReaderSelectors].
+// audit.streams with SSCAN and stops after [MaxAuditMembers] members. It keeps
+// the members that match the app name pattern and whose stream
+// audit.stream:<member> exists. A forged member with no stream is not in the
+// result. If the set has more than [MaxAuditMembers] members, or more than
+// [MaxAuditApps] members are valid, it returns the first [MaxAuditApps] apps and
+// [ErrTooManyAuditApps]. The caller logs the error and uses the list. The user
+// needs [AuditReaderSelectors].
 func AuditApps(ctx context.Context, c valkeygo.Client) ([]string, error) {
-	members, err := c.Do(ctx, c.B().Smembers().Key(streams.AuditIndexKey).Build()).AsStrSlice()
-	if err != nil {
-		if valkeygo.IsValkeyNil(err) {
-			return nil, nil
+	var members []string
+	truncated := false
+	var cursor uint64
+	for {
+		entry, err := c.Do(ctx, c.B().Sscan().Key(streams.AuditIndexKey).Cursor(cursor).Count(auditScanCount).Build()).AsScanEntry()
+		if err != nil {
+			if valkeygo.IsValkeyNil(err) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("streams: SSCAN %s: %w", streams.AuditIndexKey, err)
 		}
-		return nil, fmt.Errorf("streams: SMEMBERS %s: %w", streams.AuditIndexKey, err)
+		members = append(members, entry.Elements...)
+		cursor = entry.Cursor
+		if len(members) >= MaxAuditMembers {
+			truncated = true
+			break
+		}
+		if cursor == 0 {
+			break
+		}
 	}
 	candidates := make([]string, 0, len(members))
 	for _, m := range members {
@@ -640,6 +676,9 @@ func AuditApps(ctx context.Context, c valkeygo.Client) ([]string, error) {
 				return apps[:MaxAuditApps], ErrTooManyAuditApps
 			}
 		}
+	}
+	if truncated {
+		return apps, ErrTooManyAuditApps
 	}
 	return apps, nil
 }

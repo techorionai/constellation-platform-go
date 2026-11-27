@@ -31,7 +31,7 @@ func TestU12AuditSelectors(t *testing.T) {
 	wantProducer := "(~audit.stream:helpdesk +xadd +xtrim) (~audit.streams +sadd)"
 	wantReader := "(~audit.stream:* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream " +
 		"+xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange) " +
-		"(~audit.streams +smembers)"
+		"(~audit.streams +sscan)"
 	if got := streamsvalkey.AuditProducerSelectors("helpdesk"); got != wantProducer {
 		t.Errorf("AuditProducerSelectors = %q\nwant %q", got, wantProducer)
 	}
