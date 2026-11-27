@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -509,4 +510,135 @@ func sorted(s []string) []string {
 		}
 	}
 	return out
+}
+
+func auditClient(t *testing.T, vk *containers.ValkeyInstance, prefix string, opts ...containers.ACLOption) valkeygo.Client {
+	t.Helper()
+	user, password := vk.NewACLUser(t, prefix, opts...)
+	c, err := valkeygo.NewClient(valkeygo.ClientOption{
+		InitAddress: []string{vk.Address()}, Username: user, Password: password.Reveal(), DisableCache: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	return c
+}
+
+func auditMembers(t *testing.T, admin valkeygo.Client) []string {
+	t.Helper()
+	got, err := admin.Do(t.Context(), admin.B().Smembers().Key(streams.AuditIndexKey).Build()).AsStrSlice()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sorted(got)
+}
+
+func auditSeed(t *testing.T, admin valkeygo.Client, forged int, apps ...string) {
+	t.Helper()
+	ctx := t.Context()
+	if err := admin.Do(ctx, admin.B().Del().Key(streams.AuditIndexKey).Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range apps {
+		if err := doArbitrary(admin, []string{"XADD", "audit.stream:" + a, "*", "event", "{}"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := doArbitrary(admin, []string{"SADD", streams.AuditIndexKey, a}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for start := 0; start < forged; start += 1000 {
+		cmd := []string{"SADD", streams.AuditIndexKey}
+		for i := start; i < min(start+1000, forged); i++ {
+			cmd = append(cmd, fmt.Sprintf("f%06d", i+1))
+		}
+		if err := doArbitrary(admin, cmd); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestIntegrationAuditApps(t *testing.T) {
+	vk := containers.Valkey(t)
+	admin := vk.Admin(t)
+
+	// I7e: the second check finds an app that publishes between the first check and the SREM.
+	t.Run("I7e_second_check", func(t *testing.T) {
+		auditSeed(t, admin, 0, "helpdesk")
+		if err := doArbitrary(admin, []string{"SADD", streams.AuditIndexKey, "newapp"}); err != nil {
+			t.Fatal(err)
+		}
+		producer := auditClient(t, vk, "newapp", containers.ValkeyACLEvents(), containers.ValkeyACLAuditProducer())
+		reader := auditClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
+		defer streamsvalkey.SetAuditBeforeSrem(func() {
+			if err := doArbitrary(producer, []string{"XADD", "audit.stream:newapp", "*", "event", "{}"}); err != nil {
+				t.Error(err)
+			}
+		})()
+		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
+		if err != nil || !slices.Equal(apps, []string{"helpdesk", "newapp"}) {
+			t.Fatalf("AuditApps = %v, err = %v", apps, err)
+		}
+	})
+
+	// I7f: the scan limit counts the members that the scan reads.
+	t.Run("I7f_scan_limit", func(t *testing.T) {
+		auditSeed(t, admin, 700, "helpdesk")
+		reader := auditClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
+		defer streamsvalkey.SetAuditMemberLimit(600)()
+		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
+		if !errors.Is(err, streamsvalkey.ErrTooManyAuditApps) {
+			t.Fatalf("err = %v, want ErrTooManyAuditApps", err)
+		}
+		for _, a := range apps {
+			if a != "helpdesk" {
+				t.Errorf("result has %q, which has no stream", a)
+			}
+		}
+		left := auditMembers(t, admin)
+		if len(left) >= 701 || len(left) < 100 {
+			t.Errorf("set has %d members, want fewer than 701 and the unread ones", len(left))
+		}
+	})
+
+	// I7g: a set with fewer members than the limit is not truncated.
+	t.Run("I7g_below_limit", func(t *testing.T) {
+		auditSeed(t, admin, 598, "helpdesk")
+		reader := auditClient(t, vk, "audit", containers.ValkeyACLEvents(), containers.ValkeyACLAuditReader())
+		defer streamsvalkey.SetAuditMemberLimit(600)()
+		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
+		if err != nil || !slices.Equal(apps, []string{"helpdesk"}) {
+			t.Fatalf("AuditApps = %v, err = %v", apps, err)
+		}
+	})
+
+	// I7h: no second check runs after an SREM error.
+	t.Run("I7h_no_second_check_after_srem_error", func(t *testing.T) {
+		auditSeed(t, admin, 1, "helpdesk")
+		user, password := vk.NewACLUser(t, "auditold", containers.ValkeyACLEvents())
+		if err := doArbitrary(admin, []string{"ACL", "SETUSER", user,
+			"(~audit.stream:* +xinfo|stream +xrange)", "(~audit.streams +sscan)"}); err != nil {
+			t.Fatal(err)
+		}
+		reader, err := valkeygo.NewClient(valkeygo.ClientOption{
+			InitAddress: []string{vk.Address()}, Username: user, Password: password.Reveal(), DisableCache: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(reader.Close)
+		var checks atomic.Int32
+		defer streamsvalkey.SetAuditSecondCheck(func() { checks.Add(1) })()
+		apps, err := streamsvalkey.AuditApps(t.Context(), reader)
+		if err != nil || !slices.Equal(apps, []string{"helpdesk"}) {
+			t.Fatalf("AuditApps = %v, err = %v", apps, err)
+		}
+		if n := checks.Load(); n != 0 {
+			t.Errorf("second checks = %d, want 0", n)
+		}
+		if got := auditMembers(t, admin); len(got) != 2 {
+			t.Errorf("set = %v, want the forged member to stay", got)
+		}
+	})
 }
