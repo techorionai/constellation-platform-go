@@ -1485,7 +1485,7 @@ Import path: `github.com/techorionai/constellation-platform-go/streams`
 Environment variables: None.
 
 - The stream of an app is `events.stream:<app>` (`streams.StreamKey`). Stream keys do not use the `Keyspace` of the service. A service name has no `.`, so no root pattern `~<svc>:*` matches a stream key.
-- A stream belongs to a family (`streams.Family`). `streams.Events` (the default) has the prefix `events.stream:`. `streams.Audit` has the prefix `audit.stream:`. `streams.KeyFor(family, app)` returns the key. `StreamKey(app)` equals `KeyFor(Events, app)`. The audit key prefix has a `.` too, so no root pattern `~<svc>:*` matches it. Only the audit service reads audit streams. The Valkey set `audit.streams` (`streams.AuditIndexKey`) lists the apps that write an audit stream.
+- A stream belongs to a family (`streams.Family`). `streams.Events` (the default) has the prefix `events.stream:`. `streams.Audit` has the prefix `audit.stream:`. `streams.KeyFor(family, app)` returns the key. `StreamKey(app)` equals `KeyFor(Events, app)`. The audit key prefix has a `.` too, so no root pattern `~<svc>:*` matches it. Only the audit service reads audit streams. The Valkey set `audit.apps` (`streams.AuditAppsKey`) lists the registered apps that write an audit stream. Only the provisioner writes it. `streams.AuditIndexKey` (`audit.streams`) is deprecated, and no function reads or writes it.
 - A group is named `<app>` or `<app>.<name>` (`streams.GroupName`). `<name>` matches `^[a-z][a-z0-9_]{0,31}$`. `streams.ValidGroup` checks that a group belongs to an app.
 - `streams.NewConsumer(group, handler, streams.ConsumerOptions{})` makes the consumer. `Run(ctx)` loops until `ctx` ends and returns `nil`.
 
@@ -1537,14 +1537,15 @@ Environment variables: None. The functions take the raw valkey-go client (`kv.Ra
 
 | Function | Purpose |
 | -------- | ------- |
-| `NewPublisher(c, app, opts...)` | Implements `outbox.Publisher`. One `XADD events.stream:<app> * event <json>` for each payload, in one pipeline. It sets no `MAXLEN`, because retention trims the stream. The option `WithFamily(streams.Audit)` writes to `audit.stream:<app>`. |
+| `NewPublisher(c, app, opts...)` | Implements `outbox.Publisher`. One `XADD events.stream:<app> * event <json>` for each payload, in one pipeline. It sets no `MAXLEN`, because retention trims the stream. The option `WithFamily(streams.Audit)` writes to `audit.stream:<app>`. It sends no index command. |
 | `NewGroup(c, GroupConfig)` | One consumer of a consumer group. `GroupConfig` has `App` (the own app), `Stream` (the app of the stream), `Family` (default `streams.Events`), `Group`, `Consumer` (default `<host>-<random>`), and `StartID` (`$` by default, or `0`). It refuses a group that is not valid for `App`. |
 | `Lag(ctx, c, app, group)` | The age of the oldest message that the group did not acknowledge. 0 if there is none. `ErrNoGroup` if the group does not exist. It reads the event stream. |
 | `LagFor(ctx, c, family, app, group)` | The same as `Lag` for the stream of a family. |
 | `Groups(ctx, c, app)` | The sorted group names of the stream. An empty list if the stream does not exist. It reads the event stream. |
 | `GroupsFor(ctx, c, family, app)` | The same as `Groups` for the stream of a family. |
 | `NewTrimPurger(c, app, opts...)` | Implements `retention.Purger`. `XTRIM events.stream:<app> MINID <ms>-0`. The option `WithFamily(streams.Audit)` trims the audit stream. |
-| `AuditApps(ctx, c)` | The sorted apps that write an audit stream. See the section "Audit streams". |
+| `AuditApps(ctx, c)` | The sorted registered apps that have an audit stream. See the section "Audit streams". |
+| `RegisterAuditApp(ctx, c, app)`, `UnregisterAuditApp(ctx, c, app)` | `SADD` or `SREM` of `audit.apps`. Use the client of the provisioner (the Valkey admin). An invalid app gives an error and no command. |
 | `ACLSelectors(app)` | The text of the two ACL selectors. It panics if `app` does not match the app name pattern. `NewPublisher` and `NewTrimPurger` also panic for an invalid `app`. |
 | `AuditProducerSelectors(app)`, `AuditReaderSelectors()` | The text of the audit ACL selectors. See the section "Audit streams". |
 
@@ -1570,26 +1571,50 @@ Each service user keeps `~<svc>:*` and gets two selectors. The text is the resul
 
 The audit entries go to `audit.stream:<app>`. The audit service reads them with `NewGroup(c, GroupConfig{App: "audit", Stream: app, Family: streams.Audit, Group: "audit"})` and a consumer with `NeverDrop`. The own app of the audit service is `audit`.
 
-Each service user gets the producer selectors, besides `ACLSelectors`. Only the audit service user gets the reader selectors. The text is the result of the two functions. The deploy files copy it.
+Each service user gets the producer selector, besides `ACLSelectors`. Only the audit service user gets the reader selectors. The text is the result of the two functions. The deploy files copy it.
 
 ```txt
 AuditProducerSelectors("<svc>"):
 (~audit.stream:<svc> +xadd +xtrim)
-(~audit.streams +sadd)
 
 AuditReaderSelectors():
 (~audit.stream:* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream +xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange)
-(~audit.streams +sscan +srem)
+(~audit.apps +sscan)
 ```
 
-- A service writes only its own audit stream. It cannot read any audit stream, and it cannot read the set `audit.streams`.
+- A service writes only its own audit stream. It cannot read any audit stream, and it has no command on the set `audit.apps`.
 - `AuditProducerSelectors` panics if `app` does not match the app name pattern.
-- The install refuses `SCAN` for service users, so the audit service cannot find streams with `SCAN`. An audit publisher adds its app to the set `audit.streams` with `SADD` after its first successful publish in the process. Then it adds the app again after a successful publish when the last add is older than 1 minute, so the set is filled again after Valkey loses it. A failed `SADD` is logged at `warn` level with no data. The publish does not fail, and the publisher tries again after the next publish. The option `WithAuditIndexRefresh` changes the 1 minute for a test. `WithLogger` sets the logger.
-- `AuditApps(ctx, c)` reads the set with `SSCAN`, page by page. Only a member that matches the app name pattern and whose stream `audit.stream:<member>` exists (`XINFO STREAM`) counts as an app. For each page, it deletes the members that fail the pattern or have no stream with one `SREM audit.streams <members>`. Then it sends `XINFO STREAM` one more time for the deleted members that match the pattern. A member whose stream exists now is in the result. The check and the delete are not atomic, and the install refuses Lua. But the publisher sends `XADD` before `SADD`, so a real app is in the result, or it stays in the set. In the race path, the `SREM` can delete the member of an app that publishes between the first check and the `SREM`. The second check puts the app in the result of this call. The set does not have the member until the publisher sends `SADD` again, at its next index refresh. The function returns the apps sorted, with a maximum of 1000 (`MaxAuditApps`). A deleted member does not count against this limit. Each member that the scan reads counts against `MaxAuditMembers` (1000000). If more than 1000 members have a stream, or the scan reaches `MaxAuditMembers` and the set has more, it returns the apps that it found (a maximum of 1000) and `ErrTooManyAuditApps`. The caller logs the error and uses the list. A forged member names a stream that only its own app can write, so it gives no access.
-- An `SREM` error with `NOPERM` does not stop `AuditApps`. For example, a deploy that has no `+srem` yet gives `NOPERM`. The members stay in the set, they do not count, and the next call examines them again. The function sends no second check after an `SREM` error. The function writes one warning to the default logger (`slog`) in each call, so the operator sees the missing permission. After the first `NOPERM`, the call limits the rest of the scan to 10000 members in total, because a reader without `+srem` cannot delete the forged members. If the set has more members, the call returns `ErrTooManyAuditApps`. Any other `SREM` error, for example a connection error or a cancelled context, stops the call. The call returns this error. Update the deploy so that the reader has `+srem`. To check the reader ACL, run `ACL DRYRUN <reader user> SREM audit.streams x`. It must return `OK`. The update of `constellation-deploy` adds `+srem`.
-- Risk: a service can add many forged members to the set. Each call of `AuditApps` reads at most `MaxAuditMembers` members. A full call of 1000000 members sends approximately 2000 `SSCAN` commands and up to 1000000 `XINFO STREAM` commands, and the set uses approximately 100 MB of memory. On a local test Valkey, a full call that deleted nothing took 6 to 8 seconds. The first call with `+srem` took approximately 14 seconds, because it deletes all the members. The next call took approximately 3 milliseconds. The audit service does not start new consumers until the call returns. With `+srem`, the set gets small after the first call, because the call deletes the forged members. To keep the set over the limit, a producer must add approximately 1000000 new names in each refresh period of the audit service (`INTAKE__REFRESH`, default 30 seconds). This is approximately 33000 members each second, all the time. Then the `SSCAN` order can hide a new app, and the audit service reports `too_many_apps` at each refresh. The table `known_apps` of the audit service protects each app that it found before. Without `+srem`, the forged members stay. But each call reads at most 10000 members, which is approximately 1 percent of a full call.
+- The trusted index: the install refuses `SCAN` for service users, so the audit service finds the streams with the set `audit.apps` (`streams.AuditAppsKey`). Only the provisioner (the Valkey admin) writes the set. No producer can write it, and the reader can only read it with `SSCAN`. The reason: Valkey ACL cannot limit the value of `SADD`, so each producer that could write the index could add forged names. The number of registered apps is the bound on the work of one `AuditApps` call. A `Publish` sends no index command. The option `WithAuditIndexRefresh` and the constant `DefaultAuditIndexRefresh` are deprecated and have no effect.
+- The provisioner step: after it makes the producer user of an app, it registers the app with `RegisterAuditApp(ctx, admin, app)` or with `SADD audit.apps <app>` as the admin user. When it deletes the producer user, it removes the app with `UnregisterAuditApp` or `SREM audit.apps <app>`. A producer that is not registered is not found.
+- `AuditApps(ctx, c)` reads the set with `SSCAN`, page by page. Only a member that matches the app name pattern and whose stream `audit.stream:<member>` exists (`XINFO STREAM`) counts as an app. It deletes no member. A registered app with no stream is an app that did not publish yet, and the next call examines it again. The function returns the apps sorted, with a maximum of 1000 (`MaxAuditApps`). The scan reads at most `MaxAuditMembers` (10000) members. If more than 1000 members have a stream, or the scan reaches `MaxAuditMembers` and the set has more, it returns the apps that it found (a maximum of 1000) and `ErrTooManyAuditApps`. The caller logs the error and uses the list. If the set does not exist, it returns an empty list. If the reader has no `+sscan` on `audit.apps` (for example, the selectors of `v0.8.0`), it returns the error `streams: SSCAN audit.apps: <err>` that wraps the `NOPERM` error. It sends no command to `audit.streams`.
+- To check the ACL, run these commands. `ACL DRYRUN <producer user> SADD audit.apps x` must return an error. `ACL DRYRUN <reader user> SREM audit.apps x` must return an error. `ACL DRYRUN <reader user> SSCAN audit.apps 0` must return `OK`.
 - The trim of an audit stream also removes the entries that the audit service did not read. Use a period that is longer than the longest stop of the audit service. The default is 7 days.
-- `containers.ValkeyACLAuditProducer()` and `containers.ValkeyACLAuditReader()` add the selectors to a test user.
+- `containers.ValkeyACLAuditProducer()` and `containers.ValkeyACLAuditReader()` add the selectors to a test user. `containers.RegisterAuditApps(t, admin, apps...)` registers apps in `audit.apps` as the admin user. `containers.AuditIndexMembers(t, admin)` returns the members of `audit.apps`. `containers.SeedAuditIndex` writes only the old set `audit.streams` and the app streams. It does not write `audit.apps`.
+
+#### Upgrade from v0.8.0 to v0.9.0
+
+Do these steps in this order.
+
+1. As the admin user, register each producer: `SADD audit.apps <app>` for each app, or `RegisterAuditApp`.
+2. Give the audit service user the transition selectors. They are the reader selectors of `v0.9.0` and the old selector `(~audit.streams +sscan)`. An audit service of `v0.7.0` needs `+sscan` on `audit.streams` until its new image starts. No transition selector has `+srem`.
+
+   ```txt
+   (~audit.stream:* +xreadgroup +xack +xautoclaim +xpending +xinfo|groups +xinfo|stream +xinfo|consumers +xgroup|create +xgroup|createconsumer +xgroup|delconsumer +xrange)
+   (~audit.apps +sscan)
+   (~audit.streams +sscan)
+   ```
+
+3. Update the audit service to `v0.9.0`. A `v0.9.0` reader that has no `+sscan` on `audit.apps` gets the error of `AuditApps`, and the audit service counts `apps_error`.
+4. Give each producer the transition selectors until all producers use `v0.9.0`. A producer of `v0.7.0` or `v0.8.0` sends `SADD audit.streams` and writes a warning after each error.
+
+   ```txt
+   (~audit.stream:<svc> +xadd +xtrim)
+   (~audit.streams +sadd)
+   ```
+
+5. After all producers and the audit service use `v0.9.0`, use only the selectors of `AuditProducerSelectors` and `AuditReaderSelectors`. Check them with the `ACL DRYRUN` commands above.
+
+An old producer that has `+sadd` on `audit.streams` writes to a set that no function reads. After all producers use `v0.9.0`, you can delete the old set with `DEL audit.streams`. This step is optional, and `platform-go` does not do it.
 
 ### Event retention
 
