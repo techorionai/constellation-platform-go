@@ -114,8 +114,8 @@ func ValkeyACLEvents() ACLOption {
 	return func(o *aclOptions) { o.events = true }
 }
 
-// ValkeyACLAuditProducer adds the two ACL selectors of an audit producer. The
-// selectors are the text of streams/valkey.AuditProducerSelectors for the prefix
+// ValkeyACLAuditProducer adds the ACL selector of an audit producer. The
+// selector is the text of streams/valkey.AuditProducerSelectors for the prefix
 // of the user.
 func ValkeyACLAuditProducer() ACLOption {
 	return func(o *aclOptions) { o.auditProducer = true }
