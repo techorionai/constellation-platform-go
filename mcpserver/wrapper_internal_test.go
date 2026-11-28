@@ -1,16 +1,15 @@
 package mcpserver
 
 import (
-	"encoding/json"
-
 	"bytes"
 	"context"
-	"github.com/google/jsonschema-go/jsonschema"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/techorionai/constellation-platform-go/auth"
