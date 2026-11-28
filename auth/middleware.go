@@ -23,7 +23,16 @@ import (
 const scopeName = "github.com/techorionai/constellation-platform-go/auth"
 
 type options struct {
-	meterProvider metric.MeterProvider
+	meterProvider    metric.MeterProvider
+	resourceMetadata string
+}
+
+// WithResourceMetadata sets the URL of the protected resource metadata of
+// RFC 9728. [Middleware] adds the parameter resource_metadata="<url>" to the
+// WWW-Authenticate header of each 401 response. A 503 response does not change.
+// With no option, the header does not change.
+func WithResourceMetadata(url string) Option {
+	return func(o *options) { o.resourceMetadata = url }
 }
 
 // Option changes the behavior of [Middleware].
@@ -56,7 +65,7 @@ func Middleware(v Verifier, opts ...Option) func(http.Handler) http.Handler {
 			p, err := verifyRequest(ctx, v, r)
 			counter.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", Outcome(err))))
 			if err != nil {
-				writeVerifyError(ctx, w, err)
+				writeVerifyError(ctx, w, err, o.resourceMetadata)
 				return
 			}
 			ctx = ContextWithPrincipal(ctx, p)
@@ -114,17 +123,29 @@ func bearerToken(header string) (string, bool) {
 	return token, token != ""
 }
 
-func writeVerifyError(ctx context.Context, w http.ResponseWriter, err error) {
+func writeVerifyError(ctx context.Context, w http.ResponseWriter, err error, resourceMetadata string) {
+	param := ""
+	if resourceMetadata != "" {
+		param = `resource_metadata="` + resourceMetadata + `"`
+	}
 	switch {
 	case errors.Is(err, ErrNoToken):
-		w.Header().Set("WWW-Authenticate", "Bearer")
+		h := "Bearer"
+		if param != "" {
+			h += " " + param
+		}
+		w.Header().Set("WWW-Authenticate", h)
 		writeBody(ctx, w, problem{Title: "Authentication required", Status: http.StatusUnauthorized, Code: "unauthorized"})
 	case errors.Is(err, ErrKeysUnavailable), errors.Is(err, ErrIntrospectionUnavailable):
 		slog.WarnContext(ctx, "auth: verification unavailable", slog.Any("error", err))
 		w.Header().Set("Retry-After", retryAfterSeconds(err))
 		writeBody(ctx, w, problem{Title: "Authentication unavailable", Status: http.StatusServiceUnavailable, Code: "auth_unavailable"})
 	default:
-		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
+		h := `Bearer error="invalid_token"`
+		if param != "" {
+			h += ", " + param
+		}
+		w.Header().Set("WWW-Authenticate", h)
 		writeBody(ctx, w, problem{Title: "Authentication required", Status: http.StatusUnauthorized, Code: "unauthorized"})
 	}
 }
@@ -156,17 +177,29 @@ func RequireScopes(scopes ...string) func(http.Handler) http.Handler {
 				return
 			}
 			if missing := p.MissingScopes(scopes...); len(missing) > 0 {
-				w.Header().Set("WWW-Authenticate",
-					`Bearer error="insufficient_scope", scope="`+strings.Join(scopes, " ")+`"`)
-				writeBody(ctx, w, problem{
-					Title: "Missing scopes", Status: http.StatusForbidden,
-					Code: "insufficient_scope", MissingScopes: missing,
-				})
+				WriteInsufficientScope(ctx, w, scopes, missing, "")
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// WriteInsufficientScope writes the 403 response for a missing scope. The
+// WWW-Authenticate header has error="insufficient_scope" and the required
+// scopes. It has the resource_metadata parameter if resourceMetadata is not
+// empty. The body is a problem document with the code insufficient_scope and
+// the missing scopes.
+func WriteInsufficientScope(ctx context.Context, w http.ResponseWriter, required, missing []string, resourceMetadata string) {
+	h := `Bearer error="insufficient_scope", scope="` + strings.Join(required, " ") + `"`
+	if resourceMetadata != "" {
+		h += `, resource_metadata="` + resourceMetadata + `"`
+	}
+	w.Header().Set("WWW-Authenticate", h)
+	writeBody(ctx, w, problem{
+		Title: "Missing scopes", Status: http.StatusForbidden,
+		Code: "insufficient_scope", MissingScopes: missing,
+	})
 }
 
 // problem has the field names of the Problem model of constellation-contracts.
