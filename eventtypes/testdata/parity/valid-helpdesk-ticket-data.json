@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "unevaluatedProperties": false,
+  "required": ["ticketId", "priority", "labels"],
+  "properties": {
+    "ticketId": {"$ref": "#/$defs/uuid"},
+    "priority": {"type": "integer", "minimum": 1, "maximum": 5},
+    "labels": {"type": "array", "uniqueItems": true, "items": {"type": "string", "maxLength": 64}},
+    "requester": {"$ref": "#/$defs/person"}
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "person": {
+      "type": "object",
+      "unevaluatedProperties": false,
+      "required": ["id"],
+      "properties": {"id": {"$ref": "#/$defs/uuid"}, "name": {"type": "string"}}
+    }
+  }
+}

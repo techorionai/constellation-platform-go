@@ -2279,7 +2279,11 @@ Checks of `Registration.Validate` and `Load`. Each problem names the rule and th
 - `app` matches `^[a-z][a-z0-9_]*$` with a maximum of 32 characters. `source` is `/<app>`.
 - There are 1 to 200 types. Each `type` matches the event type pattern, has a maximum of 128 characters, starts with `<app>.`, and occurs one time.
 - Each `description` has 1 to 1024 characters.
-- Each `dataSchema` is a JSON object of 64 KiB or less. It compiles as JSON Schema draft 2020-12. A `$schema` value other than draft 2020-12 is an error. A `$ref` must start with `#`. A reference to a file, to `http` or `https`, or a relative reference is an error, and the loader reads no URL.
+- Each `dataSchema` is a JSON object of 64 KiB or less. It compiles as JSON Schema draft 2020-12. A `$schema` value other than draft 2020-12 is an error (`data_schema_draft`). A `pattern` or a `patternProperties` key must compile with Go `regexp` (RE2). A look-ahead gives `data_schema_compile`. The loader reads no URL. The `format` checks are off. The rules of the schema walk are equal to the rules of the events service:
+  - The walk goes only into these keywords. One schema: `items`, `additionalItems`, `additionalProperties`, `unevaluatedItems`, `unevaluatedProperties`, `contains`, `propertyNames`, `not`, `if`, `then`, `else`, `contentSchema`. A list of schemas: `allOf`, `anyOf`, `oneOf`, `prefixItems`, `items`. A map of schemas: `properties`, `patternProperties`, `$defs`, `definitions`, `dependentSchemas`. The walk does not go into `const`, `enum`, `default`, `examples`, or an unknown keyword.
+  - `data_schema_id`: an examined subschema must not have `$id`. A property with the name `$id` is not an error.
+  - `data_schema_depth`: the root has the depth 1. Each step into a member of the keyword lists adds 1. More than 32 levels is an error.
+  - `data_schema_ref`: a `$ref` or `$dynamicRef` must start with `#`. A reference to a file, to `http` or `https`, or a relative reference is an error. The target must be an examined subschema, or an `$anchor` or `$dynamicAnchor` of one. A pointer into `const` or into an unknown keyword is an error.
 - The encoded registration has a maximum of 4 MiB (`MaxRegistrationBytes`). `Load` refuses unknown fields and data after the object.
 
 Call `Load` on the embedded file in a unit test of the service. A bad file then fails in CI, not at the start in production.
