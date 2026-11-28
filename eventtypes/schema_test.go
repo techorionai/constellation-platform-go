@@ -2,7 +2,6 @@ package eventtypes_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,7 +102,7 @@ func TestU8U9ParityFixtures(t *testing.T) {
 	for _, f := range files {
 		name := filepath.Base(f)
 		t.Run(name, func(t *testing.T) {
-			b, err := os.ReadFile(f)
+			b, err := os.ReadFile(f) //nolint:gosec // f comes from a fixed glob
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -118,7 +117,7 @@ func TestU8U9ParityFixtures(t *testing.T) {
 					t.Fatalf("want data_schema_ref, got %v", verr)
 				}
 			default:
-				t.Fatal(fmt.Sprintf("bad fixture name %s", name))
+				t.Fatalf("bad fixture name %s", name)
 			}
 		})
 	}
