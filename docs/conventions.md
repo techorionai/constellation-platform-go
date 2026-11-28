@@ -281,6 +281,15 @@ An alert on a high rate of `keys_unavailable` or of `network_error` shows that t
 
 - Alert when `constellation.outbox.lag` is more than a few minutes, and on a rate of `outcome=dropped` that is more than 0.
 
+## MCP tools
+
+- Each application has one MCP server from the package `mcpserver`.
+- Each tool has one or more scopes of its own app. The scope starts with `<app>:`. `mcpserver.AddTool` refuses another scope.
+- A tool uses the same command as the REST handler of the same action. A tool has no business rules of its own.
+- A tool shows its scopes in `_meta` under the key `ai.techorion.constellation/requiredScopes`. `tools/list` returns all tools, so that the agent gateway can show a tool that the agent cannot use yet.
+- Never write the arguments of a tool call to a log, a span, or a metric. The hooks `OnRefused` and `OnInvalid` get the arguments to write the audit entry, and they must not log them.
+- A client asks for a token with `audience=<app>`.
+
 ## Retention
 
 - Each retention job has a name that matches `^[a-z][a-z0-9_]{0,63}$`. The name is the value of the metric attribute `job`, and the lock name is `retention:<name>`.

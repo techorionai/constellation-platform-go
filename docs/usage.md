@@ -43,6 +43,7 @@ go get github.com/techorionai/constellation-platform-go@vX.Y.Z
 | [`auth/clientcred`](#authclientcred) | Client credentials token source and token exchange with `private_key_jwt`. |
 | [`clients/identity`](#clientsidentity) | Generated identity client and manifest registry adapter. |
 | [`clients/events`](#clientsevents) | Generated events client and event type registry adapter. |
+| [`mcpserver`](#mcpserver) | MCP server with scoped tools, link templates, and RFC 9728 metadata. |
 | [`manifest`](#manifest) | Publish the permission manifest of a service at startup. |
 | [`eventtypes`](#eventtypes) | Check and register the event types of a service at startup. |
 | [`resources/test/containers`](#resourcestestcontainers) | Start PostgreSQL and Valkey containers in tests. |
@@ -1884,6 +1885,8 @@ Rules and limits:
 - A request with more than one `Authorization` header gets 401 (`ErrInvalidToken`). The middleware does not choose one header, because another component can read another header.
 - `auth.Outcome(err)` returns the value of the metric attribute `outcome` for an error, as in the error map. A nil error gives `ok`. Use it when you count the result of a direct `Verify` call.
 - `auth.WithMeterProvider(mp)` sets the meter provider of `auth.Middleware`. The default is the global meter provider. Use it in a test to read the metric.
+- `auth.WithResourceMetadata(url)` adds the parameter `resource_metadata="<url>"` to the `WWW-Authenticate` header of each 401 of `auth.Middleware`: `Bearer resource_metadata="<url>"` with no token, and `Bearer error="invalid_token", resource_metadata="<url>"` with a bad token. A 503 does not change. With no option, the headers do not change. The package `mcpserver` sets it.
+- `auth.WriteInsufficientScope(ctx, w, required, missing, resourceMetadata)` writes the 403 problem for a missing scope, with `WWW-Authenticate: Bearer error="insufficient_scope", scope="<required>"`. It adds `resource_metadata` if the URL is not empty. `RequireScopes` uses it with no URL.
 - The middleware counts each verification in the metric `constellation.auth.verify`. The adapter does not count it, so one request is one count.
 - On success, the span gets `enduser.id`, `constellation.principal.type`, `constellation.client.id`, and `constellation.principal.token_type`. The log records get `principal.id`, `principal.type`, `client.id`, and `principal.token_type`. If `Principal.Act` is not nil, the span also gets `constellation.principal.act.id` and `constellation.principal.act.type`, and the log records get `principal.act.id` and `principal.act.type`.
 - `Principal.TokenType` is `auth.TokenTypeAccess` (a JWT, also the zero value) or `auth.TokenTypeAPI` (a personal API token). A service can refuse API tokens on a route with `p.TokenType.OrAccess() == auth.TokenTypeAPI`.
@@ -2307,6 +2310,65 @@ Rules and limits:
 - No log record and no span attribute has a `dataSchema` or a `description`.
 - Metric `constellation.events.register` (counter, unit `{attempt}`) has the attribute `outcome`.
 - The package does not import `net/http` or an adapter.
+
+## mcpserver
+
+Purpose: a built-in MCP server for an application. Each tool declares its scopes. The package checks the token, the scopes, and the arguments of each tool call.
+
+Import path: `github.com/techorionai/constellation-platform-go/mcpserver`
+
+Environment variables: None. The service passes the values in `mcpserver.Config`.
+
+The package uses the official MCP Go SDK. The transport is Streamable HTTP in stateless mode with JSON responses. An instance keeps no session, so more than one instance can run behind a proxy with no session stickiness.
+
+```go
+var verifier auth.Verifier // for example auth.ByFormat(jwt, introspect)
+s, err := mcpserver.New(mcpserver.Config{
+	App: "demo", Name: "demo", Version: "1.0.0", Verifier: verifier,
+	ResourceURL:          "https://demo.example.com/mcp",
+	AuthorizationServers: []string{"https://identity.example.com"},
+	OnRefused: func(ctx context.Context, r mcpserver.Refusal) { /* write a `denied` audit entry */ },
+	OnInvalid: func(ctx context.Context, r mcpserver.Refusal) { /* write an `invalid` audit entry */ },
+})
+err = mcpserver.AddTool(s, mcpserver.ToolSpec{
+	Name: "get_item", Description: "Get one item.",
+	Scopes: []string{"demo:item:read"}, ReadOnly: true,
+}, func(ctx context.Context, p auth.Principal, in getIn) (item, error) { /* run the command */ })
+mux.Handle("/mcp", s.Handler())
+mux.Handle("/.well-known/oauth-protected-resource/mcp", s.MetadataHandler())
+```
+
+Use:
+
+- `mcpserver.New(cfg)` checks the config and returns a server. `App` is the app key. `Verifier` is the token verifier of the service. `ResourceURL` is the public URL of the MCP endpoint. `AuthorizationServers` are the issuers of the tokens.
+- `mcpserver.AddTool[In, Out](s, spec, handler)` adds a tool. The handler gets the verified `auth.Principal` and the typed input. It returns an error for a bad spec and does not panic. A bad spec is a scope without the prefix `<app>:`, no scope, no name, a name that exists, or a schema that does not resolve.
+- The package infers the input schema and the output schema from the types `In` and `Out`. The inferred schema has types, required properties, and descriptions only. To get `enum`, `maxLength`, or `format`, set `ToolSpec.InputSchema`. A given schema replaces the inferred schema. The tool checks the arguments against the schema that `tools/list` shows.
+- `s.AddLinkTemplates(set)` adds the resource `constellation://<app>/link-templates` with the MIME type `application/json`. The set follows the model `LinkTemplateSet` of `constellation-contracts`. The call returns an error for a set that breaks the rules of the contract. A read of the resource needs a valid token and no scope.
+- `s.Handler()` is the MCP endpoint. `s.MetadataHandler()` is the protected resource metadata of RFC 9728 with `resource`, `authorization_servers`, `scopes_supported` (all tool scopes), and `bearer_methods_supported`. Mount it at `/.well-known/oauth-protected-resource<path of the endpoint>`. It needs no token.
+- `Config.AllowedOrigins` lists the values of the `Origin` header that the server accepts. A request with another `Origin` gets 403. A request with no `Origin` passes, because server clients such as Bifrost send none.
+- `Config.MaxBodyBytes` limits the request body. The default is 1 MiB. A larger body gets 413. A JSON-RPC batch gets 400.
+- `Config.MeterProvider` and `Config.TracerProvider` default to the global providers.
+
+Request flow. `Handler` sets the no-store headers, checks the origin, checks the token with `auth.Middleware` and `auth.WithResourceMetadata`, runs the scope gate, and calls the SDK. The tool wrapper checks the scopes again, checks the arguments, and calls the handler.
+
+Results and errors:
+
+- A success result has `structuredContent` with the output and one text item with the same JSON.
+- A handler that returns a `*mcpserver.ToolError` gives a result with `isError` true. The text is the JSON of the error with `code`, `message`, and `fields` (`field` is a JSON Pointer, `code`, `message`). The result has no `structuredContent`.
+- Another handler error gives `isError` true with the text `{"code":"internal","message":"internal error"}`. The full error goes to the log.
+- A bad argument gives `isError` true with the code `invalid_arguments` and one field error for each bad value. The handler does not run.
+- A missing scope on a `tools/call` of a known tool gives HTTP 403 with `WWW-Authenticate: Bearer error="insufficient_scope", scope="...", resource_metadata="..."` and the problem body of `auth.WriteInsufficientScope`. A bad token gives 401 with `resource_metadata` in `WWW-Authenticate`.
+- `tools/list` returns all tools. Each tool has its scopes in `_meta` under the key `ai.techorion.constellation/requiredScopes`. The agent gateway uses it.
+
+Hooks. `Config.OnRefused` runs one time for each call that a missing scope refuses. `Config.OnInvalid` runs one time for each call with bad arguments. Both get a `Refusal` with the tool name, the missing scopes (empty for `OnInvalid`), and the arguments. The context has the principal, the request ID, and the span. Use the hooks to write the `denied` and `invalid` audit entries with the target ID from the arguments. A hook must not change `Arguments`. A hook must not write the arguments to a log or a span.
+
+Rules and limits:
+
+- A client asks the identity service for a token with the parameter `audience=<app>`. The identity service does not read the RFC 8707 parameter `resource` yet. The verifier checks that `aud` has the app key.
+- All responses of `Handler` have `Cache-Control: no-store` and `Pragma: no-cache`, also 400, 401, 403, 413, and 503.
+- The package counts each tool call in `constellation.mcp.tool.calls` and starts the span `mcp.tool`. The arguments and the results go into no log, no span, and no metric.
+- For Bifrost, set `allowed_extra_headers: ["authorization"]` on the MCP client, so that the gateway forwards the token of the caller. The server does not pass the token to another service.
+- The tool handler uses the same command as the REST handler. A tool does not have its own business rules.
 
 ## Admin sample: rotation and a manual retention run
 
