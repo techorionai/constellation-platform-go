@@ -61,7 +61,9 @@ func (s *Server) gate(next http.Handler) http.Handler {
 			if s.cfg.OnRefused != nil {
 				s.cfg.OnRefused(ctx, Refusal{Tool: msg.Params.Name, Missing: missing, Arguments: msg.Params.Arguments})
 			}
-			s.tel.count(ctx, msg.Params.Name, outcomeDenied)
+			sctx, span := s.tel.start(ctx, msg.Params.Name)
+			s.tel.count(sctx, msg.Params.Name, outcomeDenied)
+			span.End()
 			auth.WriteInsufficientScope(ctx, w, scopes, missing, s.metadataURL)
 			return
 		}

@@ -29,11 +29,57 @@ func checkArguments(rs *jsonschema.Resolved, args json.RawMessage) (json.RawMess
 		}
 		return nil, fields
 	}
-	out, err := json.Marshal(inst)
+	if len(args) == 0 || string(args) == "null" {
+		args = json.RawMessage("{}")
+	}
+	out, err := mergeDefaults(args, inst)
 	if err != nil {
 		return nil, []FieldError{{Field: "", Code: "invalid", Message: "the arguments are not valid"}}
 	}
 	return out, nil
+}
+
+// mergeDefaults adds the values that the schema defaults set to the original
+// arguments. It keeps the original bytes of each value that the caller sent, so
+// that a number above 2^53 keeps its exact value.
+func mergeDefaults(raw json.RawMessage, inst any) (json.RawMessage, error) {
+	switch v := inst.(type) {
+	case map[string]any:
+		var orig map[string]json.RawMessage
+		if json.Unmarshal(raw, &orig) != nil {
+			return json.Marshal(inst)
+		}
+		for k, val := range v {
+			if old, ok := orig[k]; ok {
+				merged, err := mergeDefaults(old, val)
+				if err != nil {
+					return nil, err
+				}
+				orig[k] = merged
+				continue
+			}
+			b, err := json.Marshal(val)
+			if err != nil {
+				return nil, err
+			}
+			orig[k] = b
+		}
+		return json.Marshal(orig)
+	case []any:
+		var orig []json.RawMessage
+		if json.Unmarshal(raw, &orig) != nil || len(orig) != len(v) {
+			return raw, nil
+		}
+		for i := range v {
+			merged, err := mergeDefaults(orig[i], v[i])
+			if err != nil {
+				return nil, err
+			}
+			orig[i] = merged
+		}
+		return json.Marshal(orig)
+	}
+	return raw, nil
 }
 
 // fieldErrors finds the bad values one level at a time. For an object schema it

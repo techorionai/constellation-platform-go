@@ -290,6 +290,16 @@ An alert on a high rate of `keys_unavailable` or of `network_error` shows that t
 - Never write the arguments of a tool call to a log, a span, or a metric. The hooks `OnRefused` and `OnInvalid` get the arguments to write the audit entry, and they must not log them.
 - A client asks for a token with `audience=<app>`.
 
+### MCP metrics and spans
+
+| Name | Type | Unit | Attributes | Meaning |
+| ---- | ---- | ---- | ---------- | ------- |
+| `constellation.mcp.tool.calls` | Counter | `{call}` | `tool`, `outcome` (`success`, `error`, `denied`, `invalid`) | One count for each tool call. The gate counts a refused call as `denied`. |
+
+| Span | Kind | Meaning |
+| ---- | ---- | ------- |
+| `mcp.tool` | Internal | One tool call, with the attribute `mcp.tool.name`. The gate also starts it for a call that it refuses. |
+
 ## Retention
 
 - Each retention job has a name that matches `^[a-z][a-z0-9_]{0,63}$`. The name is the value of the metric attribute `job`, and the lock name is `retention:<name>`.

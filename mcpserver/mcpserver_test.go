@@ -509,3 +509,49 @@ func TestDefaultProviders(t *testing.T) {
 		t.Error("nil handler")
 	}
 }
+
+// R2: the gate starts an mcp.tool span for a call that it refuses.
+func TestGateDeniedSpan(t *testing.T) {
+	sr := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+	e := newEnv(t, principals(testPrincipals), func(c *mcpserver.Config) { c.TracerProvider = tp })
+	res := rawPost(t, e.ts.URL+"/mcp", "read", callBody("update_item", `{"id":"abc","status":"open"}`), nil)
+	if res.StatusCode != 403 {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+	n := 0
+	for _, sp := range sr.Ended() {
+		if sp.Name() == "mcp.tool" && strings.Contains(attrsText(sp), "update_item") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d mcp.tool spans, want 1", n)
+	}
+}
+
+// R6: a body with duplicate keys or keys with a different case does not run
+// the handler of a tool with a missing scope.
+func TestGateKeyVariants(t *testing.T) {
+	bodies := map[string]string{
+		"duplicate name":   `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_item","name":"update_item","arguments":{"id":"abc","status":"open"}}}`,
+		"duplicate method": `{"jsonrpc":"2.0","id":1,"method":"tools/list","method":"tools/call","params":{"name":"update_item","arguments":{"id":"abc","status":"open"}}}`,
+		"upper case keys":  `{"jsonrpc":"2.0","id":1,"Method":"tools/call","Params":{"Name":"update_item","Arguments":{"id":"abc","status":"open"}}}`,
+		"data after value": `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"update_item","arguments":{"id":"abc","status":"open"}}} {}`,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			e := newDefault(t)
+			res := rawPost(t, e.ts.URL+"/mcp", "read", body, nil)
+			if res.StatusCode >= 500 {
+				t.Errorf("status %d", res.StatusCode)
+			}
+			if *e.handlerCalls != 0 {
+				t.Error("handler ran")
+			}
+			if len(e.rec.refused) > 1 {
+				t.Errorf("OnRefused ran %d times", len(e.rec.refused))
+			}
+		})
+	}
+}

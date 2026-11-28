@@ -1,8 +1,11 @@
 package mcpserver
 
 import (
+	"encoding/json"
+
 	"bytes"
 	"context"
+	"github.com/google/jsonschema-go/jsonschema"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -63,5 +66,36 @@ func TestU4WrapperChecksScopes(t *testing.T) {
 	if len(refused) != 1 || refused[0].Tool != "w" || len(refused[0].Missing) != 1 || refused[0].Missing[0] != "demo:a:write" ||
 		!strings.Contains(string(refused[0].Arguments), "x1") {
 		t.Errorf("refusals %+v", refused)
+	}
+}
+
+// R3: a number above 2^53 keeps its exact value, and the defaults are applied.
+func TestCheckArgumentsKeepsLargeInteger(t *testing.T) {
+	type in struct {
+		N    int64  `json:"n"`
+		Mode string `json:"mode,omitempty"`
+	}
+	schema, err := jsonschema.For[in](nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema.Properties["mode"].Default = json.RawMessage(`"fast"`)
+	rs, err := schema.Resolve(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, fields := checkArguments(rs, json.RawMessage(`{"n":9007199254740993}`))
+	if len(fields) > 0 {
+		t.Fatalf("fields %+v", fields)
+	}
+	var got in
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.N != 9007199254740993 {
+		t.Errorf("n = %d", got.N)
+	}
+	if got.Mode != "fast" {
+		t.Errorf("mode = %q, out %s", got.Mode, out)
 	}
 }
