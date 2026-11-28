@@ -2,8 +2,10 @@ package eventtypes_test
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,32 +95,70 @@ func TestU7LoadIndex(t *testing.T) {
 	}
 }
 
+// parityFixtures maps each fixture file to the error code that it must give.
+// An empty code means that the schema is valid.
+var parityFixtures = map[string]string{
+	"invalid-anchor-in-unknown-keyword.json":      "data_schema_ref",
+	"invalid-deep-in-unknown-keyword.json":        "data_schema_ref",
+	"invalid-dynamic-ref-to-unknown-keyword.json": "data_schema_ref",
+	"invalid-escaped-pointer.json":                "data_schema_ref",
+	"invalid-id-in-unknown-keyword.json":          "data_schema_ref",
+	"invalid-nested-ref-to-unexamined.json":       "data_schema_ref",
+	"invalid-pointer-into-const.json":             "data_schema_ref",
+	"valid-anchor.json":                           "",
+	"valid-defs-escape.json":                      "",
+	"valid-helpdesk-ticket-data.json":             "",
+	"valid-property-id.json":                      "",
+	"valid-root-ref.json":                         "",
+}
+
 // U8 and U9
 func TestU8U9ParityFixtures(t *testing.T) {
 	files, err := filepath.Glob("testdata/parity/*.json")
-	if err != nil || len(files) != 12 {
-		t.Fatalf("fixtures: %d, %v", len(files), err)
+	if err != nil {
+		t.Fatal(err)
 	}
+	got := make([]string, 0, len(files))
 	for _, f := range files {
-		name := filepath.Base(f)
+		got = append(got, filepath.Base(f))
+	}
+	want := slices.Sorted(maps.Keys(parityFixtures))
+	if !slices.Equal(slices.Sorted(slices.Values(got)), want) {
+		t.Fatalf("fixture files: got %v, want %v", got, want)
+	}
+	for _, name := range want {
+		code := parityFixtures[name]
 		t.Run(name, func(t *testing.T) {
-			b, err := os.ReadFile(f) //nolint:gosec // f comes from a fixed glob
+			b, err := os.ReadFile(filepath.Join("testdata/parity", name)) //nolint:gosec // name comes from a fixed list
 			if err != nil {
 				t.Fatal(err)
 			}
 			verr := regWithSchema(string(b)).Validate()
-			switch {
-			case strings.HasPrefix(name, "valid-"):
+			if code == "" {
 				if verr != nil {
 					t.Fatal(verr)
 				}
-			case strings.HasPrefix(name, "invalid-"):
-				if verr == nil || !strings.Contains(verr.Error(), "data_schema_ref") {
-					t.Fatalf("want data_schema_ref, got %v", verr)
-				}
-			default:
-				t.Fatalf("bad fixture name %s", name)
+				return
+			}
+			if verr == nil || !strings.Contains(verr.Error(), code) {
+				t.Fatalf("want %s, got %v", code, verr)
 			}
 		})
+	}
+}
+
+// R3: the first error does not depend on the map order.
+func TestSchemaWalkOrder(t *testing.T) {
+	const doc = `{"properties":{"b":{"$id":"urn:b"},"a":{"$ref":"https://x/y"},"c":{"$id":"urn:c"}}}`
+	for range 20 {
+		wantErr(t, doc, "data_schema_ref")
+	}
+}
+
+// R2: the error shows the value of the reference.
+func TestSchemaRefValueInError(t *testing.T) {
+	verr := regWithSchema(`{"properties":{"x":{"$ref":"#/$defs/nope"}}}`).Validate()
+	if verr == nil || !strings.Contains(verr.Error(), `"#/$defs/nope"`) {
+		t.Fatalf("got %v", verr)
 	}
 }

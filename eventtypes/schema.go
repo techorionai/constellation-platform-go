@@ -3,7 +3,9 @@ package eventtypes
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -39,9 +41,9 @@ type schemaWalk struct {
 // target the walk did not examine. A target that the walk did not examine can
 // be a part of an unknown keyword. The compiler compiles it as a schema, with
 // no check of the $id and the depth. The root has the depth 1.
-func checkKeywords(v any, depth int) error {
+func checkKeywords(v any) error {
 	w := &schemaWalk{pointers: map[string]struct{}{}, anchors: map[string]struct{}{}}
-	if err := w.walk(v, depth, ""); err != nil {
+	if err := w.walk(v, 1, ""); err != nil {
 		return err
 	}
 	for _, ref := range w.refs {
@@ -58,16 +60,16 @@ func (w *schemaWalk) checkRef(ref string) error {
 	if frag != "" && !strings.HasPrefix(frag, "/") {
 		name, err := url.PathUnescape(frag)
 		if _, ok := w.anchors[name]; err != nil || !ok {
-			return errors.New("data_schema_ref: the anchor of the reference is not in an examined schema")
+			return fmt.Errorf("data_schema_ref: the anchor of the reference %q is not in an examined schema", ref)
 		}
 		return nil
 	}
 	ptr, err := url.PathUnescape(frag)
 	if err != nil {
-		return errors.New("data_schema_ref: the pointer of the reference is not valid")
+		return fmt.Errorf("data_schema_ref: the pointer of the reference %q is not valid", ref)
 	}
 	if _, ok := w.pointers[ptr]; !ok {
-		return errors.New("data_schema_ref: the target of the reference is not a subschema that the service examines")
+		return fmt.Errorf("data_schema_ref: the target of the reference %q is not a subschema that the service examines", ref)
 	}
 	return nil
 }
@@ -118,7 +120,8 @@ func (w *schemaWalk) walk(v any, depth int, ptr string) error {
 	}
 	for _, k := range schemaMapKeywords {
 		if sub, ok := m[k].(map[string]any); ok {
-			for name, item := range sub {
+			for _, name := range slices.Sorted(maps.Keys(sub)) {
+				item := sub[name]
 				if err := w.walk(item, depth+1, ptr+"/"+k+"/"+escapePointer(name)); err != nil {
 					return err
 				}

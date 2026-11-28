@@ -159,7 +159,7 @@ func checkSchema(typ string, raw json.RawMessage) error {
 	if s, has := obj["$schema"]; has && s != draft2020 {
 		return fmt.Errorf("data_schema_draft: $schema must be %s", draft2020)
 	}
-	if err := checkKeywords(doc, 1); err != nil {
+	if err := checkKeywords(doc); err != nil {
 		return err
 	}
 	c := jsonschema.NewCompiler()
