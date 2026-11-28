@@ -159,7 +159,7 @@ func checkSchema(typ string, raw json.RawMessage) error {
 	if s, has := obj["$schema"]; has && s != draft2020 {
 		return fmt.Errorf("data_schema_draft: $schema must be %s", draft2020)
 	}
-	if err := checkLocalRefs(doc); err != nil {
+	if err := checkKeywords(doc); err != nil {
 		return err
 	}
 	c := jsonschema.NewCompiler()
@@ -199,52 +199,4 @@ func Load(fsys fs.FS, path string) (Registration, error) {
 		return Registration{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return r, nil
-}
-
-// Keywords whose value is one schema, a list of schemas, or a map of schemas.
-// checkLocalRefs goes only into these keywords. It does not go into const, enum,
-// default, examples, or an unknown keyword, because their values are data.
-var (
-	schemaKeywords     = []string{"items", "additionalItems", "additionalProperties", "unevaluatedItems", "unevaluatedProperties", "contains", "propertyNames", "not", "if", "then", "else", "contentSchema"}
-	schemaListKeywords = []string{"allOf", "anyOf", "oneOf", "prefixItems", "items"}
-	schemaMapKeywords  = []string{"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"}
-)
-
-// checkLocalRefs reports a $ref or $dynamicRef of a schema that does not start
-// with "#". A reference must point into the schema itself. It examines the
-// schema keywords only.
-func checkLocalRefs(v any) error {
-	m, ok := v.(map[string]any)
-	if !ok {
-		return nil
-	}
-	for _, k := range []string{"$ref", "$dynamicRef"} {
-		if s, ok := m[k].(string); ok && !strings.HasPrefix(s, "#") {
-			return fmt.Errorf("data_schema_ref: %s %q must be a local reference that starts with #", k, s)
-		}
-	}
-	for _, k := range schemaKeywords {
-		if err := checkLocalRefs(m[k]); err != nil {
-			return err
-		}
-	}
-	for _, k := range schemaListKeywords {
-		if list, ok := m[k].([]any); ok {
-			for _, item := range list {
-				if err := checkLocalRefs(item); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	for _, k := range schemaMapKeywords {
-		if sub, ok := m[k].(map[string]any); ok {
-			for _, item := range sub {
-				if err := checkLocalRefs(item); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
 }

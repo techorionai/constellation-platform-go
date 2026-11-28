@@ -1,0 +1,1 @@
+{"$defs":{"a":{"$anchor":"foo","type":"string"}},"properties":{"x":{"$ref":"#foo"}}}
